@@ -38,14 +38,27 @@ export interface ReturnRecord {
   status: 'Restocked' | 'Disposed';
 }
 
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  role: 'Super Admin' | 'Admin' | 'Warehouse Staff' | 'Shop Staff';
+  location: string;
+  status: 'Active' | 'Inactive';
+}
+
 interface AppState {
   inventory: InventoryItem[];
   invoices: Invoice[];
   returns: ReturnRecord[];
+  users: User[];
   
   // Actions
   addInvoice: (invoice: Invoice) => void;
   processReturn: (returnRec: ReturnRecord) => void;
+  addUser: (user: User) => void;
+  updateUser: (id: string, updatedUser: Partial<User>) => void;
+  deleteUser: (id: string) => void;
 }
 
 // Initial Mock Data
@@ -72,10 +85,18 @@ const initialInvoices: Invoice[] = [
   }
 ];
 
+const initialUsers: User[] = [
+  { id: 'u1', name: 'Rayan Admin', email: 'user0@777global.com', role: 'Super Admin', location: 'Global', status: 'Active' },
+  { id: 'u2', name: 'Ayesha Khan', email: 'user1@777global.com', role: 'Admin', location: 'India HQ', status: 'Active' },
+  { id: 'u3', name: 'Rahul Sharma', email: 'user2@777global.com', role: 'Warehouse Staff', location: 'Main WH', status: 'Active' },
+  { id: 'u4', name: 'Priya Patel', email: 'user3@777global.com', role: 'Shop Staff', location: 'Mumbai Shop', status: 'Active' },
+];
+
 export const useStore = create<AppState>((set) => ({
   inventory: initialInventory,
   invoices: initialInvoices,
   returns: [],
+  users: initialUsers,
 
   addInvoice: (invoice) => set((state) => {
     // Deduct from inventory
@@ -110,5 +131,15 @@ export const useStore = create<AppState>((set) => ({
       inventory: newInventory,
       returns: [returnRec, ...state.returns]
     };
-  })
+  }),
+
+  addUser: (user) => set((state) => ({ users: [...state.users, user] })),
+  
+  updateUser: (id, updatedUser) => set((state) => ({
+    users: state.users.map(u => (u.id === id ? { ...u, ...updatedUser } : u))
+  })),
+
+  deleteUser: (id) => set((state) => ({
+    users: state.users.filter(u => u.id !== id)
+  }))
 }));
