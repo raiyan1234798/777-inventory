@@ -1,9 +1,65 @@
 import { useState } from 'react';
-import { PackagePlus, Boxes, Filter, Search, MoreVertical, Plus } from 'lucide-react';
+import { PackagePlus, Boxes, Filter, Search, Trash2, Edit2 } from 'lucide-react';
 import Modal from '../components/Modal';
+import { useStore } from '../store';
+import type { InventoryItem } from '../store';
+import { db } from '../lib/firebase';
+import { doc, setDoc, deleteDoc } from 'firebase/firestore';
+
+const LOW_STOCK = 10;
+
+const emptyItem = (): Omit<InventoryItem, 'id'> => ({
+  name: '', category: '', sku: '', quantity: 0, unitCost: 0, sellingPrice: 0,
+});
 
 export default function Warehouse() {
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const { inventory } = useStore();
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState(emptyItem());
+  const [search, setSearch] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const totalItems   = inventory.reduce((s, i) => s + i.quantity, 0);
+  const lowStockCount = inventory.filter(i => i.quantity <= LOW_STOCK).length;
+
+  const filtered = inventory.filter(i =>
+    i.name.toLowerCase().includes(search.toLowerCase()) ||
+    i.sku.toLowerCase().includes(search.toLowerCase()) ||
+    i.category.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const openAdd = () => {
+    setEditingId(null);
+    setForm(emptyItem());
+    setIsModalOpen(true);
+  };
+
+  const openEdit = (item: InventoryItem) => {
+    setEditingId(item.id);
+    setForm({ name: item.name, category: item.category, sku: item.sku, quantity: item.quantity, unitCost: item.unitCost, sellingPrice: item.sellingPrice });
+    setIsModalOpen(true);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const id = editingId ?? `INV-${Date.now()}`;
+      await setDoc(doc(db, 'inventory', id), { id, ...form }, { merge: true });
+      setIsModalOpen(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (item: InventoryItem) => {
+    if (!window.confirm(`Delete "${item.name}"?`)) return;
+    await deleteDoc(doc(db, 'inventory', item.id));
+  };
 
   return (
     <div className="space-y-6">
@@ -14,15 +70,10 @@ export default function Warehouse() {
         </div>
         <div className="flex space-x-3 w-full sm:w-auto">
           <button className="flex-1 sm:flex-none btn-secondary flex items-center justify-center">
-            <Filter className="w-4 h-4 mr-2" />
-            Filter
+            <Filter className="w-4 h-4 mr-2" /> Filter
           </button>
-          <button 
-            onClick={() => setIsAddModalOpen(true)}
-            className="flex-1 sm:flex-none btn-primary flex items-center justify-center shadow-lg shadow-primary/30"
-          >
-            <PackagePlus className="w-4 h-4 mr-2" />
-            Add Container
+          <button onClick={openAdd} className="flex-1 sm:flex-none btn-primary flex items-center justify-center shadow-lg shadow-primary/30">
+            <PackagePlus className="w-4 h-4 mr-2" /> Add Item
           </button>
         </div>
       </div>
@@ -31,25 +82,21 @@ export default function Warehouse() {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
         <div className="card bg-gradient-to-br from-primary to-blue-600 text-white transform hover:-translate-y-1 transition-transform">
           <p className="text-blue-100 text-sm font-medium">Total Items in Warehouse</p>
-          <p className="text-4xl font-bold mt-2">124,500</p>
+          <p className="text-4xl font-bold mt-2">{totalItems.toLocaleString()}</p>
           <div className="mt-4 flex items-center text-sm text-blue-200">
             <Boxes className="w-4 h-4 mr-2" />
-            Spread across 45 categories
+            Across {inventory.length} SKUs
           </div>
         </div>
         <div className="card transform hover:-translate-y-1 transition-transform">
-          <p className="text-gray-500 text-sm font-medium">Containers Arriving</p>
-          <p className="text-4xl font-bold mt-2 text-gray-900">2</p>
-          <div className="mt-4 flex items-center text-sm text-gray-500">
-            Next: CN-773 (Tomorrow)
-          </div>
+          <p className="text-gray-500 text-sm font-medium">Total Products</p>
+          <p className="text-4xl font-bold mt-2 text-gray-900">{inventory.length}</p>
+          <div className="mt-4 text-sm text-gray-500">Unique SKUs in system</div>
         </div>
         <div className="card transform hover:-translate-y-1 transition-transform">
           <p className="text-gray-500 text-sm font-medium">Needs Restock</p>
-          <p className="text-4xl font-bold mt-2 text-danger">8</p>
-          <div className="mt-4 flex items-center text-sm text-gray-500">
-            Items below minimum threshold
-          </div>
+          <p className={`text-4xl font-bold mt-2 ${lowStockCount > 0 ? 'text-danger' : 'text-success'}`}>{lowStockCount}</p>
+          <div className="mt-4 text-sm text-gray-500">Items below {LOW_STOCK} units</div>
         </div>
       </div>
 
@@ -59,9 +106,11 @@ export default function Warehouse() {
           <h2 className="text-lg font-semibold text-gray-900">Current Stock View</h2>
           <div className="relative w-full sm:w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input 
-              type="text" 
-              placeholder="Search items, categories..." 
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search items, SKU, category..."
               className="w-full bg-gray-50 border border-gray-200 text-sm rounded-lg pl-9 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200"
             />
           </div>
@@ -70,104 +119,105 @@ export default function Warehouse() {
           <table className="w-full text-left text-sm text-gray-500 min-w-[800px]">
             <thead className="bg-gray-50 text-xs uppercase text-gray-700">
               <tr>
-                <th scope="col" className="px-6 py-4 font-medium">Item & Brand</th>
-                <th scope="col" className="px-6 py-4 font-medium">Category</th>
-                <th scope="col" className="px-6 py-4 font-medium">Quantity</th>
-                <th scope="col" className="px-6 py-4 font-medium">Avg Cost (INR)</th>
-                <th scope="col" className="px-6 py-4 font-medium">Status</th>
-                <th scope="col" className="px-6 py-4 font-medium text-right">Actions</th>
+                <th className="px-6 py-4 font-medium">Item & SKU</th>
+                <th className="px-6 py-4 font-medium">Category</th>
+                <th className="px-6 py-4 font-medium">Quantity</th>
+                <th className="px-6 py-4 font-medium">Unit Cost (INR)</th>
+                <th className="px-6 py-4 font-medium">Selling Price (INR)</th>
+                <th className="px-6 py-4 font-medium">Status</th>
+                <th className="px-6 py-4 font-medium text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 bg-white">
-              {[1, 2, 3, 4, 5].map((row) => (
-                <tr key={row} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex flex-col">
-                      <span className="font-semibold text-gray-900">Premium Leather Jacket {row}</span>
-                      <span className="text-xs text-gray-500 mt-1">Brand: Zara • SKU: ZRA-{1020 + row}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                      Apparel
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 font-medium text-gray-900">{200 * row}</td>
-                  <td className="px-6 py-4">₹{(1200 + row * 100).toLocaleString()}</td>
-                  <td className="px-6 py-4">
-                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-success/10 text-success">
-                      In Stock
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <button className="text-gray-400 hover:text-primary transition-colors p-1 rounded hover:bg-primary/10">
-                      <MoreVertical className="w-5 h-5" />
-                    </button>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-gray-400">
+                    {inventory.length === 0
+                      ? 'No inventory yet. Add your first item!'
+                      : 'No results match your search.'}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filtered.map(item => (
+                  <tr key={item.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-gray-900">{item.name}</span>
+                        <span className="text-xs text-gray-500 mt-1">SKU: {item.sku}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                        {item.category}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 font-medium text-gray-900">{item.quantity}</td>
+                    <td className="px-6 py-4">₹{item.unitCost.toLocaleString()}</td>
+                    <td className="px-6 py-4">₹{item.sellingPrice.toLocaleString()}</td>
+                    <td className="px-6 py-4">
+                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${item.quantity <= LOW_STOCK ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'}`}>
+                        {item.quantity <= LOW_STOCK ? 'Low Stock' : 'In Stock'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => openEdit(item)} className="text-primary hover:bg-primary/10 p-1 rounded transition-colors">
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => handleDelete(item)} className="text-danger hover:bg-danger/10 p-1 rounded transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
-        <div className="p-4 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between text-sm text-gray-500 bg-white gap-4">
-          <span>Showing 1 to 5 of 45 results</span>
-          <div className="flex space-x-2">
-            <button className="px-3 py-1 border border-gray-200 rounded hover:bg-gray-50">Prev</button>
-            <button className="px-3 py-1 border border-primary bg-primary text-white rounded shadow-sm">1</button>
-            <button className="px-3 py-1 border border-gray-200 rounded hover:bg-gray-50 transition-colors">2</button>
-            <button className="px-3 py-1 border border-gray-200 rounded hover:bg-gray-50 transition-colors">Next</button>
-          </div>
+        <div className="p-4 border-t border-gray-100 text-sm text-gray-500 bg-white">
+          Showing {filtered.length} of {inventory.length} items
         </div>
       </div>
 
-      <Modal 
-        isOpen={isAddModalOpen} 
-        onClose={() => setIsAddModalOpen(false)}
-        title="Add Delivery Container"
-        description="Register a new shipping container and log its item manifest."
-        size="lg"
+      {/* Add / Edit Modal */}
+      <Modal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title={editingId ? 'Edit Inventory Item' : 'Add Inventory Item'}
+        description={editingId ? 'Update the product details below.' : 'Enter the details for the new stock item.'}
+        size="md"
       >
-        <form className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Container ID</label>
-              <input type="text" className="input-field" placeholder="e.g. CN-9942" />
+        <form onSubmit={handleSave} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Item Name</label>
+              <input required className="input-field" placeholder="e.g. Premium Leather Jacket" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Source Country</label>
-              <select className="input-field bg-white">
-                <option>China (CNY)</option>
-                <option>USA (USD)</option>
-                <option>Europe (EUR)</option>
-              </select>
+              <label className="block text-sm font-medium text-gray-700 mb-1">SKU</label>
+              <input required className="input-field" placeholder="e.g. ZRA-1021" value={form.sku} onChange={e => setForm(f => ({ ...f, sku: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+              <input required className="input-field" placeholder="e.g. Apparel" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+              <input required type="number" min={0} className="input-field" placeholder="0" value={form.quantity || ''} onChange={e => setForm(f => ({ ...f, quantity: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Unit Cost (₹)</label>
+              <input required type="number" min={0} className="input-field" placeholder="0" value={form.unitCost || ''} onChange={e => setForm(f => ({ ...f, unitCost: Number(e.target.value) }))} />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Selling Price (₹)</label>
+              <input required type="number" min={0} className="input-field" placeholder="0" value={form.sellingPrice || ''} onChange={e => setForm(f => ({ ...f, sellingPrice: Number(e.target.value) }))} />
             </div>
           </div>
-          
-          <div className="border border-gray-200 rounded-xl p-4 bg-gray-50">
-            <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
-              <Boxes className="w-4 h-4 mr-2 text-primary" />
-              Item Manifest
-            </h4>
-            <div className="space-y-3">
-              <div className="grid grid-cols-12 gap-3 pb-2 border-b border-gray-200 text-xs font-medium text-gray-500 uppercase">
-                <div className="col-span-6">Item/SKU</div>
-                <div className="col-span-3">Quantity</div>
-                <div className="col-span-3">Unit Cost</div>
-              </div>
-              <div className="grid grid-cols-12 gap-3 items-center">
-                <div className="col-span-6"><input type="text" className="input-field text-sm" placeholder="Search SKU..." /></div>
-                <div className="col-span-3"><input type="number" className="input-field text-sm" placeholder="Qty" /></div>
-                <div className="col-span-3"><input type="number" className="input-field text-sm" placeholder="Cost" /></div>
-              </div>
-            </div>
-            <button type="button" className="mt-4 text-sm font-medium text-primary hover:text-blue-700 flex items-center transition-colors">
-              <Plus className="w-4 h-4 mr-1" /> Add Another Row
-            </button>
-          </div>
-
           <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-            <button type="button" className="btn-secondary" onClick={() => setIsAddModalOpen(false)}>Cancel</button>
-            <button type="button" className="btn-primary" onClick={() => setIsAddModalOpen(false)}>Save Container</button>
+            <button type="button" className="btn-secondary" onClick={() => setIsModalOpen(false)}>Cancel</button>
+            <button type="submit" className="btn-primary" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save Changes' : 'Add Item'}</button>
           </div>
         </form>
       </Modal>
