@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { db } from '../lib/firebase';
+import { collection, doc, setDoc, deleteDoc, writeBatch, onSnapshot, query, orderBy } from 'firebase/firestore';
 
 export interface InventoryItem {
   id: string;
@@ -52,94 +54,148 @@ interface AppState {
   invoices: Invoice[];
   returns: ReturnRecord[];
   users: User[];
+  isSyncing: boolean;
   
   // Actions
-  addInvoice: (invoice: Invoice) => void;
-  processReturn: (returnRec: ReturnRecord) => void;
-  addUser: (user: User) => void;
-  updateUser: (id: string, updatedUser: Partial<User>) => void;
-  deleteUser: (id: string) => void;
+  addInvoice: (invoice: Invoice) => Promise<void>;
+  processReturn: (returnRec: ReturnRecord) => Promise<void>;
+  addUser: (user: User) => Promise<void>;
+  updateUser: (id: string, updatedUser: Partial<User>) => Promise<void>;
+  deleteUser: (id: string) => Promise<void>;
+  
+  // Real-time setters
+  setInventory: (data: InventoryItem[]) => void;
+  setInvoices: (data: Invoice[]) => void;
+  setReturns: (data: ReturnRecord[]) => void;
+  setUsers: (data: User[]) => void;
+  setIsSyncing: (val: boolean) => void;
 }
 
-// Initial Mock Data
-const initialInventory: InventoryItem[] = [
-  { id: '1', name: 'Premium Leather Jacket', category: 'Apparel', sku: 'ZRA-1021', quantity: 200, unitCost: 1200, sellingPrice: 4200 },
-  { id: '2', name: 'Wireless Headphones', category: 'Electronics', sku: 'SNY-992', quantity: 150, unitCost: 4500, sellingPrice: 8900 },
-  { id: '3', name: 'Running Sneakers', category: 'Footwear', sku: 'NKE-303', quantity: 80, unitCost: 2100, sellingPrice: 5500 },
-];
-
-const initialInvoices: Invoice[] = [
-  {
-    id: 'INV-1001',
-    date: new Date().toISOString(),
-    customerName: 'Aarav Patel',
-    shopLocation: 'Mumbai Downtown',
-    items: [
-      { itemId: '1', name: 'Premium Leather Jacket', quantity: 3, unitPrice: 4200, total: 12600 },
-      { itemId: '3', name: 'Running Sneakers', quantity: 1, unitPrice: 5500, total: 5500 }
-    ],
-    subtotal: 18100,
-    currency: 'INR',
-    convertedTotalINR: 18100,
-    status: 'Paid'
-  }
-];
-
-const initialUsers: User[] = [
-  { id: 'u1', name: 'Rayan Admin', email: 'user0@777global.com', role: 'Super Admin', location: 'Global', status: 'Active' },
-  { id: 'u2', name: 'Ayesha Khan', email: 'user1@777global.com', role: 'Admin', location: 'India HQ', status: 'Active' },
-  { id: 'u3', name: 'Rahul Sharma', email: 'user2@777global.com', role: 'Warehouse Staff', location: 'Main WH', status: 'Active' },
-  { id: 'u4', name: 'Priya Patel', email: 'user3@777global.com', role: 'Shop Staff', location: 'Mumbai Shop', status: 'Active' },
-];
-
-export const useStore = create<AppState>((set) => ({
-  inventory: initialInventory,
-  invoices: initialInvoices,
+export const useStore = create<AppState>((set, get) => ({
+  inventory: [],
+  invoices: [],
   returns: [],
-  users: initialUsers,
+  users: [],
+  isSyncing: false,
 
-  addInvoice: (invoice) => set((state) => {
-    // Deduct from inventory
-    const newInventory = [...state.inventory];
-    invoice.items.forEach(invItem => {
-      const target = newInventory.find(i => i.id === invItem.itemId);
-      if (target) {
-        target.quantity -= invItem.quantity;
+  setInventory: (data) => set({ inventory: data }),
+  setInvoices: (data) => set({ invoices: data }),
+  setReturns: (data) => set({ returns: data }),
+  setUsers: (data) => set({ users: data }),
+  setIsSyncing: (val) => set({ isSyncing: val }),
+
+  addInvoice: async (invoice) => {
+    try {
+      const batch = writeBatch(db);
+      
+      // Save Invoice
+      const invoiceRef = doc(db, 'invoices', invoice.id);
+      batch.set(invoiceRef, invoice);
+
+      // Deduct from inventory
+      const currentInventory = get().inventory;
+      for (const invItem of invoice.items) {
+        const target = currentInventory.find(i => i.id === invItem.itemId);
+        if (target) {
+          const itemRef = doc(db, 'inventory', target.id);
+          batch.set(itemRef, { ...target, quantity: target.quantity - invItem.quantity }, { merge: true });
+        }
       }
-    });
 
-    return {
-      inventory: newInventory,
-      invoices: [invoice, ...state.invoices]
-    };
-  }),
-
-  processReturn: (returnRec) => set((state) => {
-    const newInventory = [...state.inventory];
-    
-    // Add restockable items back to inventory if they are restocked
-    if (returnRec.status === 'Restocked') {
-      returnRec.items.forEach(retItem => {
-         const target = newInventory.find(i => i.id === retItem.itemId);
-         if (target) {
-           target.quantity += retItem.returnQuantity;
-         }
-      });
+      await batch.commit();
+    } catch (error) {
+      console.error("Error adding invoice: ", error);
+      throw error;
     }
+  },
 
-    return {
-      inventory: newInventory,
-      returns: [returnRec, ...state.returns]
-    };
-  }),
+  processReturn: async (returnRec) => {
+    try {
+      const batch = writeBatch(db);
+      
+      // Save return record
+      const returnRef = doc(db, 'returns', returnRec.id);
+      batch.set(returnRef, returnRec);
 
-  addUser: (user) => set((state) => ({ users: [...state.users, user] })),
+      // Add restockable items back to inventory if they are restocked
+      if (returnRec.status === 'Restocked') {
+        const currentInventory = get().inventory;
+        for (const retItem of returnRec.items) {
+          const target = currentInventory.find(i => i.id === retItem.itemId);
+          if (target) {
+             const itemRef = doc(db, 'inventory', target.id);
+             batch.set(itemRef, { ...target, quantity: target.quantity + retItem.returnQuantity }, { merge: true });
+          }
+        }
+      }
+
+      await batch.commit();
+    } catch (error) {
+      console.error("Error processing return: ", error);
+      throw error;
+    }
+  },
+
+  addUser: async (user) => {
+    try {
+      await setDoc(doc(db, 'users', user.id), user);
+    } catch (error) {
+      console.error("Error adding user: ", error);
+      throw error;
+    }
+  },
   
-  updateUser: (id, updatedUser) => set((state) => ({
-    users: state.users.map(u => (u.id === id ? { ...u, ...updatedUser } : u))
-  })),
+  updateUser: async (id, updatedUser) => {
+    try {
+      await setDoc(doc(db, 'users', id), updatedUser, { merge: true });
+    } catch (error) {
+      console.error("Error updating user: ", error);
+      throw error;
+    }
+  },
 
-  deleteUser: (id) => set((state) => ({
-    users: state.users.filter(u => u.id !== id)
-  }))
+  deleteUser: async (id) => {
+    try {
+      await deleteDoc(doc(db, 'users', id));
+    } catch (error) {
+      console.error("Error deleting user: ", error);
+      throw error;
+    }
+  }
 }));
+
+// Setup Firestore listeners
+export const initFirestoreSync = () => {
+  const store = useStore.getState();
+  store.setIsSyncing(true);
+
+  const unsubInventory = onSnapshot(collection(db, 'inventory'), (snapshot) => {
+    const data = snapshot.docs.map(doc => doc.data() as InventoryItem);
+    store.setInventory(data);
+  });
+
+  const unsubInvoices = onSnapshot(query(collection(db, 'invoices'), orderBy('date', 'desc')), (snapshot) => {
+    const data = snapshot.docs.map(doc => doc.data() as Invoice);
+    store.setInvoices(data);
+  });
+
+  const unsubReturns = onSnapshot(query(collection(db, 'returns'), orderBy('date', 'desc')), (snapshot) => {
+    const data = snapshot.docs.map(doc => doc.data() as ReturnRecord);
+    store.setReturns(data);
+  });
+
+  const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as User);
+    store.setUsers(data);
+  });
+
+  store.setIsSyncing(false);
+
+  // Return a cleanup function
+  return () => {
+    unsubInventory();
+    unsubInvoices();
+    unsubReturns();
+    unsubUsers();
+  };
+};

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useStore, User } from '../store';
+import { useStore } from '../store';
+import type { User } from '../store';
 import { UserPlus, Edit2, ShieldAlert, KeyRound, MapPin, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 
@@ -193,7 +194,7 @@ export default function Users() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Role Assignment</label>
-              <select className="input-field py-2.5 bg-white" value={role} onChange={e => setRole(e.target.value as any)}>
+              <select className="input-field py-2.5 bg-white" value={role} onChange={e => setRole(e.target.value as User['role'])}>
                 <option>Shop Staff</option>
                 <option>Warehouse Staff</option>
                 <option>Admin</option>
@@ -214,7 +215,7 @@ export default function Users() {
           {editingUserId && (
              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Account Status</label>
-                <select className="input-field py-2.5 bg-white" value={status} onChange={e => setStatus(e.target.value as any)}>
+                <select className="input-field py-2.5 bg-white" value={status} onChange={e => setStatus(e.target.value as User['status'])}>
                   <option>Active</option>
                   <option>Inactive</option>
                 </select>

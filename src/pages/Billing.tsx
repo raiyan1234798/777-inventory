@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 import type { Invoice, InvoiceItem } from '../store';
-import { Receipt, Search, FileText, Download, Plus } from 'lucide-react';
+import { Receipt, Search, FileText, Download } from 'lucide-react';
 import Modal from '../components/Modal';
 import { format } from 'date-fns';
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
@@ -14,9 +14,13 @@ import {
   Globe,
   Menu,
   ScanBarcode,
-  X
+  X,
+  LogOut
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useAuthStore } from '../store/authStore';
+import { initFirestoreSync } from '../store';
+import { auth, signOut } from '../lib/firebase';
 
 const navItems = [
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -32,6 +36,20 @@ const navItems = [
 export default function Layout() {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const { appUser } = useAuthStore();
+
+  useEffect(() => {
+    const unsub = initFirestoreSync();
+    return () => unsub();
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('Logout failed', error);
+    }
+  };
 
   return (
     <div className="flex h-screen bg-gray-50 font-sans text-text">
@@ -82,16 +100,23 @@ export default function Layout() {
           })}
         </div>
 
-        <div className="p-4 border-t border-gray-100">
-          <div className="flex items-center space-x-3 cursor-pointer p-2 rounded-xl hover:bg-gray-50 transition-colors">
+        <div className="p-4 border-t border-gray-100 flex items-center justify-between">
+          <div className="flex items-center space-x-3 p-2 rounded-xl">
             <div className="w-10 h-10 rounded-full bg-primary/20 flex flex-shrink-0 items-center justify-center text-primary font-bold">
-              RA
+              {appUser?.name ? appUser.name.charAt(0).toUpperCase() : 'U'}
             </div>
             <div className="flex flex-col overflow-hidden">
-              <span className="text-sm font-semibold text-gray-900 truncate">Rayan Admin</span>
-              <span className="text-xs text-gray-500 truncate">super_admin</span>
+              <span className="text-sm font-semibold text-gray-900 truncate">{appUser?.name || 'User'}</span>
+              <span className="text-xs text-gray-500 truncate">{appUser?.role || 'Guest'}</span>
             </div>
           </div>
+          <button 
+            onClick={handleLogout}
+            className="p-2 text-gray-500 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors"
+            title="Sign Out"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
         </div>
       </aside>
 

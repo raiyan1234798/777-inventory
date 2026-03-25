@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useStore } from '../store';
 import type { ReturnRecord, Invoice } from '../store';
-import { Undo2, AlertCircle, Camera, UploadCloud, Search } from 'lucide-react';
+import { Undo2, AlertCircle, UploadCloud, Search } from 'lucide-react';
 import Modal from '../components/Modal';
 import { format } from 'date-fns';
 
