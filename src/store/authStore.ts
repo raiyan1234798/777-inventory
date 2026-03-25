@@ -1,8 +1,4 @@
 import { create } from 'zustand';
-import type { User as FirebaseUser } from 'firebase/auth';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth, db } from '../lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
 
 export interface AppUser {
   id: string;
@@ -14,47 +10,28 @@ export interface AppUser {
 }
 
 interface AuthState {
-  user: FirebaseUser | null;
+  user: any;
   appUser: AppUser | null;
   loading: boolean;
-  setUser: (user: FirebaseUser | null, appUser: AppUser | null) => void;
+  setUser: (user: any, appUser: AppUser | null) => void;
   setLoading: (loading: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  appUser: null,
-  loading: true,
+  user: { uid: 'open-user-123' },
+  appUser: {
+    id: 'admin-123',
+    name: 'Open Admin',
+    email: 'admin@777global.com',
+    role: 'Super Admin',
+    location: 'Global',
+    status: 'Active'
+  },
+  loading: false,
   setUser: (user, appUser) => set({ user, appUser, loading: false }),
   setLoading: (loading) => set({ loading }),
 }));
 
-// Initialize auth listener
 export const initAuth = () => {
-  onAuthStateChanged(auth, async (firebaseUser) => {
-    if (firebaseUser) {
-      // Try to fetch custom user data from Firestore
-      try {
-        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        if (userDoc.exists()) {
-          useAuthStore.getState().setUser(firebaseUser, { id: userDoc.id, ...userDoc.data() } as AppUser);
-        } else {
-          // Fallback if no specific role document exists yet
-          useAuthStore.getState().setUser(firebaseUser, {
-            id: firebaseUser.uid,
-            name: firebaseUser.displayName || firebaseUser.email || 'User',
-            email: firebaseUser.email || '',
-            role: 'Shop Staff', // Default role
-            location: 'Unknown',
-            status: 'Active'
-          });
-        }
-      } catch (error) {
-        console.error("Error fetching user data:", error);
-        useAuthStore.getState().setUser(firebaseUser, null);
-      }
-    } else {
-      useAuthStore.getState().setUser(null, null);
-    }
-  });
+  // Authentication is disabled; open for all
 };

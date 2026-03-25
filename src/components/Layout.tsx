@@ -14,13 +14,11 @@ import {
   Globe,
   Menu,
   ScanBarcode,
-  X,
-  LogOut
+  X
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '../store/authStore';
 import { initFirestoreSync } from '../store';
-import { auth, signOut } from '../lib/firebase';
 
 const navItems = [
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -42,14 +40,6 @@ export default function Layout() {
     const unsub = initFirestoreSync();
     return () => unsub();
   }, []);
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error('Logout failed', error);
-    }
-  };
 
   return (
     <div className="flex h-screen bg-gray-50 font-sans text-text">
@@ -110,13 +100,7 @@ export default function Layout() {
               <span className="text-xs text-gray-500 truncate">{appUser?.role || 'Guest'}</span>
             </div>
           </div>
-          <button 
-            onClick={handleLogout}
-            className="p-2 text-gray-500 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors"
-            title="Sign Out"
-          >
-            <LogOut className="w-5 h-5" />
-          </button>
+          {/* Logout button removed for open access mode */}
         </div>
       </aside>
 
