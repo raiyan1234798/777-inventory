@@ -4,7 +4,7 @@ export interface AppUser {
   id: string;
   name: string;
   email: string;
-  role: 'Super Admin' | 'Admin' | 'Warehouse Staff' | 'Shop Staff';
+  role: 'super_admin' | 'admin' | 'warehouse_staff' | 'shop_staff';
   location: string;
   status: 'Active' | 'Inactive';
 }
@@ -23,7 +23,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     id: 'admin-123',
     name: 'Open Admin',
     email: 'admin@777global.com',
-    role: 'Super Admin',
+    role: 'super_admin',
     location: 'Global',
     status: 'Active'
   },

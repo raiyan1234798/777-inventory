@@ -1,4 +1,3 @@
-
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -8,7 +7,9 @@ import Transfers from './pages/Transfers';
 import Returns from './pages/Returns';
 import Finance from './pages/Finance';
 import Users from './pages/Users';
-import Billing from './pages/Billing';
+import Notifications from './pages/Notifications';
+import ManageShops from './pages/ManageShops';
+import ManageWarehouses from './pages/ManageWarehouses';
 
 function App() {
   return (
@@ -19,11 +20,14 @@ function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="warehouse" element={<Warehouse />} />
           <Route path="shops" element={<Shops />} />
-          <Route path="billing" element={<Billing />} />
           <Route path="transfers" element={<Transfers />} />
           <Route path="returns" element={<Returns />} />
           <Route path="finance" element={<Finance />} />
           <Route path="users" element={<Users />} />
+          <Route path="notifications" element={<Notifications />} />
+          <Route path="manage-shops" element={<ManageShops />} />
+          <Route path="manage-warehouses" element={<ManageWarehouses />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
     </Router>

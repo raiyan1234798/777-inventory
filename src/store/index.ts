@@ -1,201 +1,744 @@
 import { create } from 'zustand';
 import { db } from '../lib/firebase';
-import { collection, doc, setDoc, deleteDoc, writeBatch, onSnapshot, query, orderBy } from 'firebase/firestore';
+import {
+  collection, doc, setDoc, deleteDoc, updateDoc,
+  writeBatch, onSnapshot, query, orderBy
+} from 'firebase/firestore';
 
-export interface InventoryItem {
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface Location {
   id: string;
+  name: string;
+  type: 'warehouse' | 'shop';
+  country: string;
+  currency: string;
+  manager?: string;
+  contact?: string;
+  address?: string;
+}
+
+export interface Brand {
+  id: string;
+  name: string;
+  origin_country: string;
+}
+
+export interface Item {
+  id: string;
+  brand_id: string;
   name: string;
   category: string;
   sku: string;
-  quantity: number;
-  unitCost: number; // in INR
-  sellingPrice: number; // in INR
+  min_stock_limit: number;
+  retail_price?: number; // Added to store default selling price
 }
 
-export interface InvoiceItem {
-  itemId: string;
-  name: string;
+export interface InventoryEntry {
+  id: string; // locationId_itemId composite
+  location_id: string;
+  item_id: string;
   quantity: number;
-  unitPrice: number; // in INR
-  total: number;
+  avg_cost_INR: number;
 }
 
-export interface Invoice {
+export interface Container {
   id: string;
-  date: string;
-  customerName: string;
-  shopLocation: string;
-  items: InvoiceItem[];
-  subtotal: number;
+  container_no: string; // "Number" requested by user
+  source_country: string;
+  total_cost: number;
   currency: string;
-  convertedTotalINR: number;
-  status: 'Paid' | 'Pending';
+  converted_cost_INR: number;
+  date: string;
+  notes?: string;
+}
+
+export type TransactionType = 'stock_entry' | 'transfer' | 'sale' | 'return';
+
+export interface Transaction {
+  id: string;
+  type: TransactionType;
+  from_location: string;
+  to_location: string;
+  item_id: string;
+  item_name: string;
+  quantity: number;
+  unit_cost: number;
+  currency: string;
+  converted_value_INR: number;
+  performed_by: string;
+  timestamp: string;
+  container_id?: string;
+}
+
+export interface Sale {
+  id: string;
+  item_id: string;
+  item_name: string;
+  location_id: string;
+  quantity: number;
+  selling_price: number;
+  currency: string;
+  converted_price_INR: number;
+  avg_cost_INR: number;
+  profit_INR: number;
+  sold_by: string;
+  timestamp: string;
 }
 
 export interface ReturnRecord {
   id: string;
-  invoiceId: string;
-  date: string;
-  items: { itemId: string; name: string; returnQuantity: number; reason: string }[];
+  type: 'sale_return' | 'warehouse_return';
+  item_id: string;
+  item_name: string;
+  location_id: string;
+  quantity: number;
+  reason: string;
   status: 'Restocked' | 'Disposed';
+  timestamp: string;
+  ref_transaction_id?: string;
+}
+
+export interface AppNotification {
+  id: string;
+  type: 'low_stock' | 'transfer' | 'sale' | 'stock_entry' | 'return' | 'onboard';
+  item_id?: string;
+  location_id: string;            // primary location this notification concerns
+  target_location_id?: string;    // secondary location (e.g. destination of a transfer)
+  target_roles: ('super_admin' | 'admin' | 'warehouse_staff' | 'shop_staff')[]; // who sees this
+  message: string;
+  status: 'unread' | 'read';
+  timestamp: string;
+}
+
+export interface ShopExpense {
+  id: string;
+  location_id: string;
+  amount: number;
+  currency: string;
+  converted_amount_INR: number;
+  category: string;
+  date: string;
+  notes?: string;
+}
+
+export interface ShopTarget {
+  id: string;
+  location_id: string;
+  target_amount_INR: number;
+  month: string; // YYYY-MM
 }
 
 export interface User {
   id: string;
   name: string;
   email: string;
-  role: 'Super Admin' | 'Admin' | 'Warehouse Staff' | 'Shop Staff';
-  location: string;
+  role: 'super_admin' | 'admin' | 'warehouse_staff' | 'shop_staff';
+  location_id: string;
   status: 'Active' | 'Inactive';
 }
 
+// ─── Exchange Rates (Approximate, should be updated by admin) ─────────────────
+export const EXCHANGE_RATES: Record<string, number> = {
+  INR: 1,
+  USD: 83.5,
+  EUR: 90.2,
+  GBP: 105.8,
+  CNY: 11.5,
+  PKR: 0.30,
+  SAR: 22.2,   // Saudi Riyal
+  AED: 22.7,   // UAE Dirham
+  JPY: 0.55,
+  CAD: 61.5,
+  AUD: 54.8,
+  SGD: 61.9,
+  KWD: 271.5,
+  OMR: 216.8,
+  BHD: 221.4,
+  QAR: 22.9,
+  MYR: 17.6,
+  THB: 2.3,
+};
+
+export const CURRENCIES = Object.keys(EXCHANGE_RATES).sort();
+
+export const COUNTRIES = [
+  { name: 'India', currency: 'INR' },
+  { name: 'China', currency: 'CNY' },
+  { name: 'Pakistan', currency: 'PKR' },
+  { name: 'Saudi Arabia', currency: 'SAR' },
+  { name: 'UAE', currency: 'AED' },
+  { name: 'United Kingdom', currency: 'GBP' },
+  { name: 'Europe', currency: 'EUR' },
+  { name: 'USA', currency: 'USD' },
+  { name: 'Kuwait', currency: 'KWD' },
+  { name: 'Qatar', currency: 'QAR' },
+];
+
+export function toINR(amount: number, currency: string): number {
+  return amount * (EXCHANGE_RATES[currency] ?? 1);
+}
+
+export function formatCurrency(amount: number, currency: string = 'INR'): string {
+  const symbols: Record<string, string> = {
+    INR: '₹', USD: '$', EUR: '€', GBP: '£', PKR: '₨', CNY: '¥',
+    SAR: '﷼', AED: 'د.إ', JPY: '¥', CAD: 'C$', AUD: 'A$', SGD: 'S$',
+    KWD: 'د.ك', OMR: 'ر.ع.', BHD: '.د.ب', QAR: 'ر.ق', MYR: 'RM', THB: '฿'
+  };
+  return `${symbols[currency] ?? currency + ' '}${amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * Returns a string like "SAR 100 (₹2,220)"
+ */
+export function formatDualCurrency(amount: number, currency: string): string {
+  if (currency === 'INR') return formatCurrency(amount, 'INR');
+  const inrValue = toINR(amount, currency);
+  return `${formatCurrency(amount, currency)} (${formatCurrency(inrValue, 'INR')})`;
+}
+
+// ─── Notification Helper Functions ───────────────────────────────────────────
+
+/**
+ * Get all staff members (users) assigned to a specific location
+ */
+export function getStaffByLocation(users: User[], locationId: string): User[] {
+  return users.filter(u => u.location_id === locationId && u.status === 'Active');
+}
+
+/**
+ * Determine target roles for notifications based on location type
+ * For Warehouse: warehouse_staff + admin + super_admin
+ * For Shop: shop_staff + admin + super_admin
+ * Always includes super_admin
+ */
+export function getTargetRolesForLocationStockEntry(
+  locationType: 'warehouse' | 'shop'
+): ('super_admin' | 'admin' | 'warehouse_staff' | 'shop_staff')[] {
+  if (locationType === 'warehouse') {
+    return ['super_admin', 'admin', 'warehouse_staff'];
+  } else {
+    return ['super_admin', 'admin', 'shop_staff'];
+  }
+}
+
+// ─── Store ───────────────────────────────────────────────────────────────────
+
 interface AppState {
-  inventory: InventoryItem[];
-  invoices: Invoice[];
+  locations: Location[];
+  brands: Brand[];
+  items: Item[];
+  inventory: InventoryEntry[];
+  containers: Container[];
+  transactions: Transaction[];
+  sales: Sale[];
   returns: ReturnRecord[];
+  notifications: AppNotification[];
   users: User[];
+  expenses: ShopExpense[];
+  targets: ShopTarget[];
   isSyncing: boolean;
-  
+
+  // Setters (called by Firestore listeners)
+  setLocations: (d: Location[]) => void;
+  setBrands: (d: Brand[]) => void;
+  setItems: (d: Item[]) => void;
+  setInventory: (d: InventoryEntry[]) => void;
+  setContainers: (d: Container[]) => void;
+  setTransactions: (d: Transaction[]) => void;
+  setSales: (d: Sale[]) => void;
+  setReturns: (d: ReturnRecord[]) => void;
+  setNotifications: (d: AppNotification[]) => void;
+  setUsers: (d: User[]) => void;
+  setIsSyncing: (v: boolean) => void;
+
   // Actions
-  addInvoice: (invoice: Invoice) => Promise<void>;
-  processReturn: (returnRec: ReturnRecord) => Promise<void>;
-  addUser: (user: User) => Promise<void>;
-  updateUser: (id: string, updatedUser: Partial<User>) => Promise<void>;
+  addLocation: (loc: Omit<Location, 'id'>) => Promise<void>;
+  updateLocation: (id: string, loc: Partial<Location>) => Promise<void>;
+  deleteLocation: (id: string) => Promise<void>;
+  addBrand: (brand: Omit<Brand, 'id'>) => Promise<string>;
+  deleteBrand: (id: string) => Promise<void>;
+  addItem: (item: Omit<Item, 'id'>) => Promise<void>;
+  deleteItem: (id: string) => Promise<void>;
+
+  addContainer: (container: Omit<Container, 'id'>) => Promise<string>;
+
+  // Stock entry: add items from a container into a warehouse
+  stockEntry: (params: {
+    container_id: string;
+    location_id: string;
+    item_id: string;
+    item_name: string;
+    quantity: number;
+    unit_cost: number;
+    currency: string;
+    performed_by: string;
+  }) => Promise<void>;
+
+  // Transfer between locations
+  transfer: (params: {
+    from_location: string;
+    to_location: string;
+    item_id: string;
+    item_name: string;
+    quantity: number;
+    unit_cost_INR: number;
+    performed_by: string;
+  }) => Promise<void>;
+
+  // Sale from a shop
+  recordSale: (params: {
+    item_id: string;
+    item_name: string;
+    location_id: string;
+    quantity: number;
+    selling_price: number;
+    currency: string;
+    sold_by: string;
+  }) => Promise<void>;
+
+  // Return
+  processReturn: (ret: Omit<ReturnRecord, 'id'>) => Promise<void>;
+
+  // Users
+  addUser: (user: Omit<User, 'id'>) => Promise<void>;
+  updateUser: (id: string, data: Partial<User>) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
-  
-  // Real-time setters
-  setInventory: (data: InventoryItem[]) => void;
-  setInvoices: (data: Invoice[]) => void;
-  setReturns: (data: ReturnRecord[]) => void;
-  setUsers: (data: User[]) => void;
-  setIsSyncing: (val: boolean) => void;
+
+  // Shop Management
+  addExpense: (expense: Omit<ShopExpense, 'id'>) => Promise<void>;
+  deleteExpense: (id: string) => Promise<void>;
+  setTarget: (target: Omit<ShopTarget, 'id'>) => Promise<void>;
+
+  // Setters
+  setExpenses: (d: ShopExpense[]) => void;
+  setTargets: (d: ShopTarget[]) => void;
+
+  // Helpers
+  getInventoryAt: (location_id: string, item_id: string) => InventoryEntry | undefined;
+  markNotificationRead: (id: string) => Promise<void>;
+  initFirestoreSync: () => void;
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  locations: [],
+  brands: [],
+  items: [],
   inventory: [],
-  invoices: [],
+  containers: [],
+  transactions: [],
+  sales: [],
   returns: [],
+  notifications: [],
   users: [],
+  expenses: [],
+  targets: [],
   isSyncing: false,
 
-  setInventory: (data) => set({ inventory: data }),
-  setInvoices: (data) => set({ invoices: data }),
-  setReturns: (data) => set({ returns: data }),
-  setUsers: (data) => set({ users: data }),
-  setIsSyncing: (val) => set({ isSyncing: val }),
+  setLocations: (d) => set({ locations: d }),
+  setBrands: (d) => set({ brands: d }),
+  setItems: (d) => set({ items: d }),
+  setInventory: (d) => set({ inventory: d }),
+  setContainers: (d) => set({ containers: d }),
+  setTransactions: (d) => set({ transactions: d }),
+  setSales: (d) => set({ sales: d }),
+  setReturns: (d) => set({ returns: d }),
+  setNotifications: (d) => set({ notifications: d }),
+  setUsers: (d) => set({ users: d }),
+  setExpenses: (d) => set({ expenses: d }),
+  setTargets: (d) => set({ targets: d }),
+  setIsSyncing: (v) => set({ isSyncing: v }),
 
-  addInvoice: async (invoice) => {
-    try {
-      const batch = writeBatch(db);
-      
-      // Save Invoice
-      const invoiceRef = doc(db, 'invoices', invoice.id);
-      batch.set(invoiceRef, invoice);
-
-      // Deduct from inventory
-      const currentInventory = get().inventory;
-      for (const invItem of invoice.items) {
-        const target = currentInventory.find(i => i.id === invItem.itemId);
-        if (target) {
-          const itemRef = doc(db, 'inventory', target.id);
-          batch.set(itemRef, { ...target, quantity: target.quantity - invItem.quantity }, { merge: true });
-        }
-      }
-
-      await batch.commit();
-    } catch (error) {
-      console.error("Error adding invoice: ", error);
-      throw error;
-    }
+  getInventoryAt: (location_id, item_id) => {
+    return get().inventory.find(e => e.location_id === location_id && e.item_id === item_id);
   },
 
-  processReturn: async (returnRec) => {
-    try {
-      const batch = writeBatch(db);
-      
-      // Save return record
-      const returnRef = doc(db, 'returns', returnRec.id);
-      batch.set(returnRef, returnRec);
-
-      // Add restockable items back to inventory if they are restocked
-      if (returnRec.status === 'Restocked') {
-        const currentInventory = get().inventory;
-        for (const retItem of returnRec.items) {
-          const target = currentInventory.find(i => i.id === retItem.itemId);
-          if (target) {
-             const itemRef = doc(db, 'inventory', target.id);
-             batch.set(itemRef, { ...target, quantity: target.quantity + retItem.returnQuantity }, { merge: true });
-          }
-        }
-      }
-
-      await batch.commit();
-    } catch (error) {
-      console.error("Error processing return: ", error);
-      throw error;
-    }
+  // ── Locations ──────────────────────────────────────────────────────────────
+  addLocation: async (loc) => {
+    const ref = doc(collection(db, 'locations'));
+    await setDoc(ref, { id: ref.id, ...loc });
+  },
+  updateLocation: async (id, loc) => {
+    await updateDoc(doc(db, 'locations', id), loc);
+  },
+  deleteLocation: async (id) => {
+    // Safety check: ensure no inventory remains
+    const hasInventory = get().inventory.some(e => e.location_id === id && e.quantity > 0);
+    if (hasInventory) throw new Error('Cannot delete a location that still has active inventory.');
+    await deleteDoc(doc(db, 'locations', id));
   },
 
+  // ── Brands ─────────────────────────────────────────────────────────────────
+  addBrand: async (brand) => {
+    const ref = doc(collection(db, 'brands'));
+    await setDoc(ref, { id: ref.id, ...brand });
+    return ref.id;
+  },
+  deleteBrand: async (id) => {
+    await deleteDoc(doc(db, 'brands', id));
+  },
+
+  // ── Items ──────────────────────────────────────────────────────────────────
+  addItem: async (item) => {
+    const ref = doc(collection(db, 'items'));
+    await setDoc(ref, { id: ref.id, ...item });
+  },
+  deleteItem: async (id) => {
+    await deleteDoc(doc(db, 'items', id));
+  },
+
+  // ── Container ──────────────────────────────────────────────────────────────
+  addContainer: async (container) => {
+    const ref = doc(collection(db, 'containers'));
+    await setDoc(ref, { id: ref.id, ...container });
+    return ref.id; // Return ID for chaining
+  },
+
+  // ── Stock Entry ────────────────────────────────────────────────────────────
+  stockEntry: async ({ container_id, location_id, item_id, item_name, quantity, unit_cost, currency, performed_by }) => {
+    const batch = writeBatch(db);
+    const converted = toINR(unit_cost * quantity, currency);
+    const avgCostINR = toINR(unit_cost, currency);
+
+    // Update inventory entry
+    const invId = `${location_id}_${item_id}`;
+    const existing = get().getInventoryAt(location_id, item_id);
+    const newQty = (existing?.quantity ?? 0) + quantity;
+    const newAvg = existing
+      ? (existing.avg_cost_INR * existing.quantity + avgCostINR * quantity) / newQty
+      : avgCostINR;
+
+    batch.set(doc(db, 'inventory', invId), {
+      id: invId, location_id, item_id, quantity: newQty, avg_cost_INR: newAvg
+    });
+
+    // Log transaction
+    const txRef = doc(collection(db, 'transactions'));
+    batch.set(txRef, {
+      id: txRef.id,
+      type: 'stock_entry',
+      from_location: 'supplier',
+      to_location: location_id,
+      item_id, item_name, quantity, unit_cost, currency,
+      converted_value_INR: converted,
+      performed_by,
+      container_id,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Helper to create a notification in batch
+    const createNotif = (
+      type: AppNotification['type'],
+      location_id: string,
+      message: string,
+      target_roles: AppNotification['target_roles'],
+      extra?: Partial<AppNotification>
+    ) => {
+      const notifRef = doc(collection(db, 'notifications'));
+      batch.set(notifRef, {
+        id: notifRef.id, type, location_id, message,
+        target_roles, status: 'unread',
+        timestamp: new Date().toISOString(),
+        ...extra,
+      });
+    };
+
+    // Determine location type and target roles based on location
+    const location = get().locations.find(l => l.id === location_id);
+    const locationType = location?.type ?? 'warehouse';
+    const targetRoles = getTargetRolesForLocationStockEntry(locationType);
+
+    // Stock-entry notification — location-specific staff + admin + super_admin
+    const locationName = location?.name ?? 'Location';
+    const operationMsg = locationType === 'warehouse'
+      ? `📦 Stock Received: ${item_name} — ${quantity} units added to warehouse.`
+      : `📦 Stock Transfer: ${item_name} — ${quantity} units added to shop.`;
+
+    createNotif(
+      'stock_entry', location_id,
+      operationMsg,
+      targetRoles,
+      { item_id }
+    );
+
+    // Low stock check after stock entry
+    const item = get().items.find(i => i.id === item_id);
+    if (item && newQty < item.min_stock_limit) {
+      createNotif(
+        'low_stock', location_id,
+        `⚠️ Low Stock Alert: ${item_name} at ${locationName} is below minimum (${newQty}/${item.min_stock_limit} units). Immediate action required.`,
+        targetRoles,
+        { item_id }
+      );
+    }
+
+    await batch.commit();
+  },
+
+  // ── Transfer ───────────────────────────────────────────────────────────────
+  transfer: async ({ from_location, to_location, item_id, item_name, quantity, unit_cost_INR, performed_by }) => {
+    const batch = writeBatch(db);
+
+    const fromEntry = get().getInventoryAt(from_location, item_id);
+    if (!fromEntry || fromEntry.quantity < quantity) throw new Error('Insufficient stock at source.');
+
+    const fromId = `${from_location}_${item_id}`;
+    const toId = `${to_location}_${item_id}`;
+    const toEntry = get().getInventoryAt(to_location, item_id);
+
+    const newFromQty = fromEntry.quantity - quantity;
+    const toQty = (toEntry?.quantity ?? 0) + quantity;
+    const toAvg = toEntry
+      ? (toEntry.avg_cost_INR * toEntry.quantity + unit_cost_INR * quantity) / toQty
+      : unit_cost_INR;
+
+    batch.set(doc(db, 'inventory', fromId), { ...fromEntry, quantity: newFromQty });
+    batch.set(doc(db, 'inventory', toId), { id: toId, location_id: to_location, item_id, quantity: toQty, avg_cost_INR: toAvg });
+
+    const txRef = doc(collection(db, 'transactions'));
+    batch.set(txRef, {
+      id: txRef.id, type: 'transfer',
+      from_location, to_location, item_id, item_name, quantity,
+      unit_cost: unit_cost_INR, currency: 'INR',
+      converted_value_INR: unit_cost_INR * quantity,
+      performed_by,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Low stock check for source after transfer
+    const item = get().items.find(i => i.id === item_id);
+
+    // Helper (local)
+    const createNotif2 = (
+      type: AppNotification['type'],
+      location_id: string,
+      message: string,
+      target_roles: AppNotification['target_roles'],
+      extra?: Partial<AppNotification>
+    ) => {
+      const notifRef = doc(collection(db, 'notifications'));
+      batch.set(notifRef, {
+        id: notifRef.id, type, location_id, message,
+        target_roles, status: 'unread',
+        timestamp: new Date().toISOString(),
+        ...extra,
+      });
+    };
+
+    // Transfer notification — notify location-specific staff based on location type
+    const fromLoc = get().locations.find(l => l.id === from_location);
+    const toLoc = get().locations.find(l => l.id === to_location);
+    const fromName = fromLoc?.name ?? from_location;
+    const toName = toLoc?.name ?? to_location;
+
+    // Get target roles for source and destination based on their location types
+    const fromTargetRoles = getTargetRolesForLocationStockEntry(fromLoc?.type ?? 'warehouse');
+    const toTargetRoles = getTargetRolesForLocationStockEntry(toLoc?.type ?? 'warehouse');
+
+    // Notify source location staff
+    createNotif2(
+      'transfer', from_location,
+      `🔄 Transfer Out: ${item_name} — ${quantity} units transferred from ${fromName} → ${toName} by ${performed_by}.`,
+      fromTargetRoles,
+      { item_id, target_location_id: to_location }
+    );
+    // Notify destination location staff separately
+    createNotif2(
+      'transfer', to_location,
+      `📥 Transfer In: ${item_name} — ${quantity} units received at ${toName} from ${fromName} by ${performed_by}.`,
+      toTargetRoles,
+      { item_id, target_location_id: from_location }
+    );
+
+    if (item && newFromQty < item.min_stock_limit) {
+      createNotif2(
+        'low_stock', from_location,
+        `⚠️ Low Stock Alert: ${item_name} at ${fromName} is below minimum after transfer (${newFromQty}/${item.min_stock_limit} units). Immediate action required.`,
+        fromTargetRoles,
+        { item_id }
+      );
+    }
+
+    await batch.commit();
+  },
+
+  // ── Sale ───────────────────────────────────────────────────────────────────
+  recordSale: async ({ item_id, item_name, location_id, quantity, selling_price, currency, sold_by }) => {
+    const batch = writeBatch(db);
+
+    const invEntry = get().getInventoryAt(location_id, item_id);
+    if (!invEntry || invEntry.quantity < quantity) throw new Error('Insufficient stock for sale.');
+
+    const invId = `${location_id}_${item_id}`;
+    const newQty = invEntry.quantity - quantity;
+    batch.set(doc(db, 'inventory', invId), { ...invEntry, quantity: newQty });
+
+    const convertedPriceINR = toINR(selling_price * quantity, currency);
+    const profitINR = convertedPriceINR - invEntry.avg_cost_INR * quantity;
+
+    const saleRef = doc(collection(db, 'sales'));
+    batch.set(saleRef, {
+      id: saleRef.id, item_id, item_name, location_id, quantity,
+      selling_price, currency, converted_price_INR: convertedPriceINR,
+      avg_cost_INR: invEntry.avg_cost_INR, profit_INR: profitINR,
+      sold_by, timestamp: new Date().toISOString(),
+    });
+
+    const txRef = doc(collection(db, 'transactions'));
+    batch.set(txRef, {
+      id: txRef.id, type: 'sale',
+      from_location: location_id, to_location: 'customer',
+      item_id, item_name, quantity, unit_cost: selling_price, currency,
+      converted_value_INR: convertedPriceINR, performed_by: sold_by,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Sale notification + low stock check
+    const item = get().items.find(i => i.id === item_id);
+    const saleLoc = get().locations.find(l => l.id === location_id);
+    const saleLocName = saleLoc?.name ?? location_id;
+    const saleTargetRoles = getTargetRolesForLocationStockEntry(saleLoc?.type ?? 'shop');
+
+    const createNotif3 = (
+      type: AppNotification['type'],
+      loc_id: string,
+      message: string,
+      target_roles: AppNotification['target_roles'],
+      extra?: Partial<AppNotification>
+    ) => {
+      const notifRef = doc(collection(db, 'notifications'));
+      batch.set(notifRef, {
+        id: notifRef.id, type, location_id: loc_id, message,
+        target_roles, status: 'unread',
+        timestamp: new Date().toISOString(),
+        ...extra,
+      });
+    };
+
+    // Sale notification — location staff + admin + super_admin
+    createNotif3(
+      'sale', location_id,
+      `🛍️ Sale Recorded: ${quantity}x ${item_name} sold at ${saleLocName} by ${sold_by}.`,
+      saleTargetRoles,
+      { item_id }
+    );
+
+    if (item && newQty < item.min_stock_limit) {
+      createNotif3(
+        'low_stock', location_id,
+        `⚠️ Low Stock Alert: ${item_name} at ${saleLocName} is below minimum after sale (${newQty}/${item.min_stock_limit} units). Immediate restock needed.`,
+        saleTargetRoles,
+        { item_id }
+      );
+    }
+
+    await batch.commit();
+  },
+
+  // ── Return ─────────────────────────────────────────────────────────────────
+  processReturn: async (ret) => {
+    const batch = writeBatch(db);
+    const retRef = doc(collection(db, 'returns'));
+    batch.set(retRef, { id: retRef.id, ...ret });
+
+    if (ret.status === 'Restocked') {
+      const invId = `${ret.location_id}_${ret.item_id}`;
+      const existing = get().getInventoryAt(ret.location_id, ret.item_id);
+      const newQty = (existing?.quantity ?? 0) + ret.quantity;
+      
+      // If we restock, we typically don't change the avg cost as it's a return of the same item
+      // unless the user specifies a value, but here we assume it's just a reversal.
+      if (existing) {
+        batch.set(doc(db, 'inventory', invId), { ...existing, quantity: newQty });
+      } else {
+        // If it was somehow deleted or new location, create with cost 0 (requires manual adjustment later)
+        batch.set(doc(db, 'inventory', invId), { id: invId, location_id: ret.location_id, item_id: ret.item_id, quantity: newQty, avg_cost_INR: 0 });
+      }
+    }
+
+    const txRef = doc(collection(db, 'transactions'));
+    batch.set(txRef, {
+      id: txRef.id, type: 'return',
+      from_location: 'customer', to_location: ret.location_id,
+      item_id: ret.item_id, item_name: ret.item_name, quantity: ret.quantity,
+      unit_cost: 0, currency: 'INR', converted_value_INR: 0,
+      performed_by: 'system',
+      timestamp: new Date().toISOString(),
+    });
+
+    await batch.commit();
+  },
+
+  // ── Users ──────────────────────────────────────────────────────────────────
   addUser: async (user) => {
-    try {
-      await setDoc(doc(db, 'users', user.id), user);
-    } catch (error) {
-      console.error("Error adding user: ", error);
-      throw error;
-    }
+    const ref = doc(collection(db, 'users'));
+    await setDoc(ref, { id: ref.id, ...user });
   },
-  
-  updateUser: async (id, updatedUser) => {
-    try {
-      await setDoc(doc(db, 'users', id), updatedUser, { merge: true });
-    } catch (error) {
-      console.error("Error updating user: ", error);
-      throw error;
-    }
+  updateUser: async (id, data) => {
+    await setDoc(doc(db, 'users', id), data, { merge: true });
   },
-
   deleteUser: async (id) => {
-    try {
-      await deleteDoc(doc(db, 'users', id));
-    } catch (error) {
-      console.error("Error deleting user: ", error);
-      throw error;
-    }
-  }
+    await deleteDoc(doc(db, 'users', id));
+  },
+
+  // ── Shop Management Implementation ─────────────────────────────────────────
+  addExpense: async (expense) => {
+    const ref = doc(collection(db, 'expenses'));
+    await setDoc(ref, { id: ref.id, ...expense });
+  },
+  deleteExpense: async (id) => {
+    await deleteDoc(doc(db, 'expenses', id));
+  },
+  setTarget: async (target) => {
+    // Unique target per location per month
+    const targetId = `${target.location_id}_${target.month}`;
+    await setDoc(doc(db, 'targets', targetId), { id: targetId, ...target });
+  },
+
+  markNotificationRead: async (id) => {
+    await setDoc(doc(db, 'notifications', id), { status: 'read' }, { merge: true });
+  },
+
+  initFirestoreSync: () => {
+    set({ isSyncing: true });
+    
+    onSnapshot(collection(db, 'locations'), snap => {
+      set({ locations: snap.docs.map(d => ({ id: d.id, ...d.data() } as Location)) });
+    });
+    onSnapshot(collection(db, 'brands'), snap => {
+      set({ brands: snap.docs.map(d => ({ id: d.id, ...d.data() } as Brand)) });
+    });
+    onSnapshot(collection(db, 'items'), snap => {
+      set({ items: snap.docs.map(d => ({ id: d.id, ...d.data() } as Item)) });
+    });
+    onSnapshot(collection(db, 'inventory'), snap => {
+      set({ inventory: snap.docs.map(d => ({ id: d.id, ...d.data() } as InventoryEntry)) });
+    });
+    onSnapshot(query(collection(db, 'containers'), orderBy('date', 'desc')), snap => {
+      set({ containers: snap.docs.map(d => ({ id: d.id, ...d.data() } as Container)) });
+    });
+    onSnapshot(query(collection(db, 'transactions'), orderBy('timestamp', 'desc')), snap => {
+      set({ transactions: snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)) });
+    });
+    onSnapshot(query(collection(db, 'sales'), orderBy('timestamp', 'desc')), snap => {
+      set({ sales: snap.docs.map(d => ({ id: d.id, ...d.data() } as Sale)) });
+    });
+    onSnapshot(query(collection(db, 'returns'), orderBy('timestamp', 'desc')), snap => {
+      set({ returns: snap.docs.map(d => ({ id: d.id, ...d.data() } as ReturnRecord)) });
+    });
+    onSnapshot(query(collection(db, 'notifications'), orderBy('timestamp', 'desc')), snap => {
+      set({ notifications: snap.docs.map(d => ({ id: d.id, ...d.data() } as AppNotification)) });
+    });
+    onSnapshot(collection(db, 'users'), snap => {
+      set({ users: snap.docs.map(d => ({ id: d.id, ...d.data() } as User)) });
+    });
+    onSnapshot(collection(db, 'expenses'), snap => {
+      set({ expenses: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense)) });
+    });
+    onSnapshot(collection(db, 'targets'), snap => {
+      set({ targets: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopTarget)) });
+    });
+
+    set({ isSyncing: false });
+  },
 }));
-
-// Setup Firestore listeners
-export const initFirestoreSync = () => {
-  const store = useStore.getState();
-  store.setIsSyncing(true);
-
-  const unsubInventory = onSnapshot(collection(db, 'inventory'), (snapshot) => {
-    const data = snapshot.docs.map(doc => doc.data() as InventoryItem);
-    store.setInventory(data);
-  });
-
-  const unsubInvoices = onSnapshot(query(collection(db, 'invoices'), orderBy('date', 'desc')), (snapshot) => {
-    const data = snapshot.docs.map(doc => doc.data() as Invoice);
-    store.setInvoices(data);
-  });
-
-  const unsubReturns = onSnapshot(query(collection(db, 'returns'), orderBy('date', 'desc')), (snapshot) => {
-    const data = snapshot.docs.map(doc => doc.data() as ReturnRecord);
-    store.setReturns(data);
-  });
-
-  const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as User);
-    store.setUsers(data);
-  });
-
-  store.setIsSyncing(false);
-
-  // Return a cleanup function
-  return () => {
-    unsubInventory();
-    unsubInvoices();
-    unsubReturns();
-    unsubUsers();
-  };
-};
