@@ -769,7 +769,9 @@ export default function Warehouse() {
                 <Plus className="w-4 h-4" /> Add Item
               </button>
             </div>
-            <div className="overflow-x-auto">
+            
+            {/* Desktop Table View */}
+            <div className="hidden lg:block overflow-x-auto">
               <table className="w-full text-sm text-left min-w-[600px]">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                   <tr>
@@ -799,6 +801,47 @@ export default function Warehouse() {
                 </tbody>
               </table>
             </div>
+
+            {/* Mobile & Tablet Card View */}
+            <div className="lg:hidden p-4 sm:p-5">
+              {items.length === 0 ? (
+                <div className="text-center text-gray-400 text-sm py-12">
+                  No items defined yet.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {items.map(item => (
+                    <div key={item.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
+                      <div className="flex justify-between items-start gap-2 mb-3">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-bold text-gray-900 text-sm">{item.name}</h3>
+                          <p className="text-xs text-gray-500 mt-1 font-mono">{item.sku}</p>
+                        </div>
+                        <button title="Delete Item" onClick={() => deleteItem(item.id)} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2 mb-3">
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                          <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider">Category</p>
+                          <p className="text-xs font-bold text-gray-900 mt-1">{item.category}</p>
+                        </div>
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                          <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider">Min Stock</p>
+                          <p className="text-xs font-bold text-gray-900 mt-1">{item.min_stock_limit}</p>
+                        </div>
+                      </div>
+
+                      {brands.find(b => b.id === item.brand_id) && (
+                        <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                          <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Brand</p>
+                          <p className="text-xs font-bold text-blue-900 mt-1">{brands.find(b => b.id === item.brand_id)?.name}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -808,7 +851,9 @@ export default function Warehouse() {
             <div className="p-4 flex justify-end border-b border-gray-50">
               <button onClick={() => setBrandModal(true)} className="btn-primary flex items-center gap-2 text-sm"><Plus className="w-4 h-4" /> Add Brand</button>
             </div>
-            <div className="overflow-x-auto">
+            
+            {/* Desktop Table View */}
+            <div className="hidden lg:block overflow-x-auto">
               <table className="w-full text-sm text-left">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                   <tr>
@@ -832,6 +877,29 @@ export default function Warehouse() {
                 </tbody>
               </table>
             </div>
+
+            {/* Mobile & Tablet Card View */}
+            <div className="lg:hidden p-4 sm:p-5">
+              {brands.length === 0 ? (
+                <div className="text-center text-gray-400 text-sm py-12">
+                  No brands yet.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {brands.map(b => (
+                    <div key={b.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <h3 className="font-bold text-gray-900 text-sm">{b.name}</h3>
+                          <p className="text-xs text-gray-500 mt-1">Origin: {b.origin_country}</p>
+                        </div>
+                        <button title="Delete Brand" onClick={() => deleteBrand(b.id)} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -841,7 +909,9 @@ export default function Warehouse() {
             <div className="p-4 flex justify-end border-b border-gray-50">
               <button onClick={() => setLocationModal(true)} className="btn-primary flex items-center gap-2 text-sm"><Plus className="w-4 h-4" /> Add Location</button>
             </div>
-            <div className="overflow-x-auto">
+            
+            {/* Desktop Table View */}
+            <div className="hidden lg:block overflow-x-auto">
               <table className="w-full text-sm text-left">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                   <tr>
@@ -868,6 +938,41 @@ export default function Warehouse() {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile & Tablet Card View */}
+            <div className="lg:hidden p-4 sm:p-5">
+              {locations.length === 0 ? (
+                <div className="text-center text-gray-400 text-sm py-12">
+                  No locations yet.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {locations.map(l => (
+                    <div key={l.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
+                      <div className="flex justify-between items-start gap-2 mb-3">
+                        <h3 className="font-bold text-gray-900 text-sm">{l.name}</h3>
+                        <button title="Delete Location" onClick={() => deleteLocation(l.id)} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                          <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Type</p>
+                          <p className="text-xs font-bold text-blue-900 mt-1 capitalize">{l.type}</p>
+                        </div>
+                        <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100">
+                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Country</p>
+                          <p className="text-xs font-bold text-emerald-900 mt-1">{l.country}</p>
+                        </div>
+                        <div className="bg-purple-50 rounded-lg p-3 border border-purple-100">
+                          <p className="text-[9px] uppercase font-bold text-purple-600 tracking-wider">Currency</p>
+                          <p className="text-xs font-bold text-purple-900 mt-1">{l.currency}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
