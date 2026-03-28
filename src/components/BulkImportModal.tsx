@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Upload, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { Upload, AlertCircle, CheckCircle, Loader, Edit2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { parseExcelFile, processBatch, validateStockImportRow } from '../lib/bulkOperations';
 import clsx from 'clsx';
@@ -20,6 +20,23 @@ export default function BulkImportModal({ isOpen, onClose, onImport }: BulkImpor
   const [stats, setStats] = useState({ total: 0, valid: 0, errors: 0 });
   const [parsedRows, setParsedRows] = useState<any[]>([]);
   const [previewMode, setPreviewMode] = useState(false);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editData, setEditData] = useState<any>({});
+
+  const handleEditRow = (idx: number, row: any) => {
+    setEditingIdx(idx);
+    setEditData({ ...row });
+  };
+
+  const handleSaveEdit = () => {
+    if (editingIdx !== null) {
+      const updated = [...parsedRows];
+      updated[editingIdx] = editData;
+      setParsedRows(updated);
+      setEditingIdx(null);
+      setEditData({});
+    }
+  };
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -266,24 +283,97 @@ export default function BulkImportModal({ isOpen, onClose, onImport }: BulkImpor
                   Preview ({Math.min(5, parsedRows.length)} of {parsedRows.length})
                 </p>
                 <div className="overflow-auto max-h-64 rounded-lg border border-gray-200">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        <th className="px-4 py-2 text-left font-bold text-gray-600">Item Name</th>
-                        <th className="px-4 py-2 text-left font-bold text-gray-600">QTY</th>
-                        <th className="px-4 py-2 text-left font-bold text-gray-600">Cost</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {parsedRows.slice(0, 5).map((row, idx) => (
-                        <tr key={idx} className="hover:bg-gray-50">
-                          <td className="px-4 py-2 font-medium text-gray-900">{row.item_name}</td>
-                          <td className="px-4 py-2 text-gray-600">{row.quantity}</td>
-                          <td className="px-4 py-2 text-gray-600">{row.unit_cost}</td>
+                  {editingIdx !== null ? (
+                    // Edit Mode
+                    <div className="p-4 bg-blue-50 border-b border-blue-200">
+                      <h3 className="text-sm font-bold text-gray-900 mb-4">Edit Item #{editingIdx + 1}</h3>
+                      <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-600 mb-2">Item Name</label>
+                          <input
+                            type="text"
+                            value={editData.item_name || ''}
+                            onChange={(e) => setEditData({ ...editData, item_name: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-600 mb-2">Quantity</label>
+                          <input
+                            type="number"
+                            value={editData.quantity || ''}
+                            onChange={(e) => setEditData({ ...editData, quantity: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-600 mb-2">Unit Cost (₹)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={editData.unit_cost || ''}
+                            onChange={(e) => setEditData({ ...editData, unit_cost: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-600 mb-2">Location</label>
+                          <input
+                            type="text"
+                            value={editData.location || ''}
+                            onChange={(e) => setEditData({ ...editData, location: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2 justify-end">
+                        <button
+                          onClick={() => {
+                            setEditingIdx(null);
+                            setEditData({});
+                          }}
+                          className="px-4 py-2 text-sm font-bold text-gray-900 border border-gray-200 rounded-lg hover:bg-gray-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveEdit}
+                          className="px-4 py-2 text-sm font-bold text-white bg-primary rounded-lg hover:bg-primary/90"
+                        >
+                          Save Changes
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-bold text-gray-600">Item Name</th>
+                          <th className="px-4 py-2 text-left font-bold text-gray-600">QTY</th>
+                          <th className="px-4 py-2 text-left font-bold text-gray-600">Cost</th>
+                          <th className="px-4 py-2 text-left font-bold text-gray-600">Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {parsedRows.slice(0, 5).map((row, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="px-4 py-2 font-medium text-gray-900">{row.item_name}</td>
+                            <td className="px-4 py-2 text-gray-600">{row.quantity}</td>
+                            <td className="px-4 py-2 text-gray-600">₹{row.unit_cost}</td>
+                            <td className="px-4 py-2">
+                              <button
+                                onClick={() => handleEditRow(idx, row)}
+                                className="inline-flex items-center gap-1 px-3 py-1 text-xs font-bold text-primary hover:bg-primary/10 rounded-lg transition"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                                Edit
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               </div>
 

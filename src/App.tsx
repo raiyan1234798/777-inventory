@@ -10,7 +10,7 @@ import Users from './pages/Users';
 import Notifications from './pages/Notifications';
 import ManageShops from './pages/ManageShops';
 import ManageWarehouses from './pages/ManageWarehouses';
-import ExchangeRates from './pages/ExchangeRates';
+import Reports from './pages/Reports';
 
 function App() {
   return (
@@ -24,11 +24,11 @@ function App() {
           <Route path="transfers" element={<Transfers />} />
           <Route path="returns" element={<Returns />} />
           <Route path="finance" element={<Finance />} />
+          <Route path="reports" element={<Reports />} />
           <Route path="users" element={<Users />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="manage-shops" element={<ManageShops />} />
           <Route path="manage-warehouses" element={<ManageWarehouses />} />
-          <Route path="exchange-rates" element={<ExchangeRates />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
