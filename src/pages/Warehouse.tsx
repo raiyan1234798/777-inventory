@@ -521,7 +521,9 @@ export default function Warehouse() {
                 {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
             </div>
-            <div className="table-container border-0 rounded-none shadow-none">
+            
+            {/* Desktop Table View */}
+            <div className="hidden lg:block table-container border-0 rounded-none shadow-none">
               <table className="w-full text-sm text-left min-w-[900px]">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                   <tr>
@@ -573,6 +575,82 @@ export default function Warehouse() {
                 </tbody>
               </table>
             </div>
+
+            {/* Mobile & Tablet Card View */}
+            <div className="lg:hidden p-4 sm:p-5">
+              {inventoryRows.length === 0 ? (
+                <div className="text-center text-gray-400 text-sm py-12">
+                  {inventory.length === 0 ? 'No inventory yet. Start by onboarding a new container.' : 'No results match your filters.'}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {inventoryRows.map(r => (
+                    <div key={r.id} className={`bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all ${r.isLow ? 'border-red-200 bg-red-50/30' : ''}`}>
+                      {/* Header with item name and actions */}
+                      <div className="flex justify-between items-start mb-3 gap-2">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-bold text-gray-900 text-sm truncate">{r.item.name}</h3>
+                          <p className="text-xs text-gray-500 mt-0.5">SKU: {r.item.sku}</p>
+                          {r.brand && <p className="text-xs text-gray-500">{r.brand.name}</p>}
+                        </div>
+                        <div className="flex gap-1.5 flex-shrink-0">
+                          <button title="Edit Item & Costs" onClick={() => { setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_INR: r.avg_cost_INR, retail_price: r.item.retail_price || 0 }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Search className="w-4 h-4" /></button>
+                          <button title="Transfer Stock" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1 }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-4 h-4" /></button>
+                          <button title="Delete" onClick={() => { if(confirm(`Delete "${r.item.name}" from this location?`)) deleteItem(r.item_id); }} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                      </div>
+
+                      {/* Category badge */}
+                      <div className="mb-3">
+                        <span className="inline-flex px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{r.item.category}</span>
+                      </div>
+
+                      {/* Location info */}
+                      <div className="bg-gray-50 rounded-lg p-3 mb-3 border border-gray-100">
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1">Location</p>
+                        <p className="text-sm font-medium text-gray-900">{r.loc.name}</p>
+                        <p className="text-xs text-gray-500 capitalize">{r.loc.type} · {r.loc.country}</p>
+                      </div>
+
+                      {/* Metrics grid */}
+                      <div className="grid grid-cols-3 gap-2 mb-3">
+                        <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                          <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Qty</p>
+                          <p className="text-lg font-extrabold text-blue-900 mt-1">{r.quantity}</p>
+                        </div>
+                        <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100">
+                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Avg Cost</p>
+                          <p className="text-xs font-bold text-emerald-900 mt-1">{formatCurrency(r.avg_cost_INR)}</p>
+                        </div>
+                        <div className="bg-purple-50 rounded-lg p-3 border border-purple-100">
+                          <p className="text-[9px] uppercase font-bold text-purple-600 tracking-wider">Retail</p>
+                          <p className="text-xs font-bold text-purple-900 mt-1">{formatCurrency(r.item.retail_price || 0)}</p>
+                        </div>
+                      </div>
+
+                      {/* Total stock breakdown */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                        <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider mb-2">Total Stock: {getTotalStockForItem(r.item_id)} units</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {getItemLocations(r.item_id).map((loc, idx) => (
+                            <span key={idx} className="text-[10px] font-bold px-2 py-1 rounded-full bg-blue-100 text-blue-700">{loc.location}: {loc.quantity}</span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Low stock warning */}
+                      {r.isLow && (
+                        <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-2 flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                          <p className="text-xs text-red-700 font-medium">Low stock - below {r.item.min_stock_limit} minimum</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="px-5 py-3 border-t border-gray-50 text-xs text-gray-400">
               Showing {inventoryRows.length} of {inventory.length} inventory entries
             </div>
@@ -581,46 +659,105 @@ export default function Warehouse() {
 
         {/* ── Containers Tab ── */}
         {activeTab === 'containers' && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left min-w-[600px]">
-              <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-                <tr>
-                  <th className="px-5 py-3 font-medium">Source Country</th>
-                  <th className="px-5 py-3 font-medium">Date</th>
-                  <th className="px-5 py-3 font-medium text-right">Total Cost</th>
-                  <th className="px-5 py-3 font-medium">Packing List (Logged)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50 bg-white">
-                {containers.length === 0 ? (
-                  <tr><td colSpan={4} className="px-5 py-12 text-center text-gray-400 text-sm">No containers logged yet. Use "Onboard Container" to start.</td></tr>
-                ) : containers.map(c => (
-                  <tr key={c.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0">
-                    <td className="px-5 py-3.5 align-top">
-                      <div className="font-medium text-gray-900">{c.source_country}</div>
-                      <div className="text-[10px] text-primary mt-1 uppercase font-extrabold tracking-wider">#{c.container_no || c.id.slice(-6)}</div>
-                    </td>
-                    <td className="px-5 py-3.5 text-gray-500 align-top whitespace-nowrap">{new Date(c.date).toLocaleDateString('en-IN')}</td>
-                    <td className="px-5 py-3.5 text-right font-medium text-gray-900 align-top whitespace-nowrap">{formatDualCurrency(c.total_cost, c.currency)}</td>
-                    <td className="px-5 py-3.5 align-top">
-                      <div className="text-gray-400 text-[11px] mb-2 italic line-clamp-1" title={c.notes}>{c.notes || 'No container notes'}</div>
-                      <div className="flex flex-wrap gap-1.5 min-h-[20px]">
-                        {/* Linked Items Visualization */}
-                        {transactions.filter(t => t.container_id === c.id).length > 0 ? (
-                           transactions.filter(t => t.container_id === c.id).map((t: any) => (
-                             <span key={t.id} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 whitespace-nowrap">
-                               {t.item_name} × {t.quantity}
-                             </span>
-                           ))
-                        ) : (
-                          <span className="text-[10px] text-gray-300">No stock entry linked yet</span>
-                        )}
-                      </div>
-                    </td>
+          <div>
+            {/* Desktop Table View */}
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="w-full text-sm text-left min-w-[600px]">
+                <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                  <tr>
+                    <th className="px-5 py-3 font-medium">Source Country</th>
+                    <th className="px-5 py-3 font-medium">Date</th>
+                    <th className="px-5 py-3 font-medium text-right">Total Cost</th>
+                    <th className="px-5 py-3 font-medium">Packing List (Logged)</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-50 bg-white">
+                  {containers.length === 0 ? (
+                    <tr><td colSpan={4} className="px-5 py-12 text-center text-gray-400 text-sm">No containers logged yet. Use "Onboard Container" to start.</td></tr>
+                  ) : containers.map(c => (
+                    <tr key={c.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0">
+                      <td className="px-5 py-3.5 align-top">
+                        <div className="font-medium text-gray-900">{c.source_country}</div>
+                        <div className="text-[10px] text-primary mt-1 uppercase font-extrabold tracking-wider">#{c.container_no || c.id.slice(-6)}</div>
+                      </td>
+                      <td className="px-5 py-3.5 text-gray-500 align-top whitespace-nowrap">{new Date(c.date).toLocaleDateString('en-IN')}</td>
+                      <td className="px-5 py-3.5 text-right font-medium text-gray-900 align-top whitespace-nowrap">{formatDualCurrency(c.total_cost, c.currency)}</td>
+                      <td className="px-5 py-3.5 align-top">
+                        <div className="text-gray-400 text-[11px] mb-2 italic line-clamp-1" title={c.notes}>{c.notes || 'No container notes'}</div>
+                        <div className="flex flex-wrap gap-1.5 min-h-[20px]">
+                          {/* Linked Items Visualization */}
+                          {transactions.filter(t => t.container_id === c.id).length > 0 ? (
+                             transactions.filter(t => t.container_id === c.id).map((t: any) => (
+                               <span key={t.id} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 whitespace-nowrap">
+                                 {t.item_name} × {t.quantity}
+                               </span>
+                             ))
+                          ) : (
+                            <span className="text-[10px] text-gray-300">No stock entry linked yet</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile & Tablet Card View */}
+            <div className="lg:hidden p-4 sm:p-5">
+              {containers.length === 0 ? (
+                <div className="text-center text-gray-400 text-sm py-12">
+                  No containers logged yet. Use "Onboard Container" to start.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {containers.map(c => (
+                    <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
+                      {/* Header */}
+                      <div className="flex justify-between items-start mb-3 gap-2">
+                        <div>
+                          <p className="text-sm font-bold text-gray-900">{c.source_country}</p>
+                          <p className="text-[10px] text-primary uppercase font-extrabold tracking-wider mt-1">Container #{c.container_no || c.id.slice(-6)}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-gray-500">{new Date(c.date).toLocaleDateString('en-IN')}</p>
+                        </div>
+                      </div>
+
+                      {/* Cost section */}
+                      <div className="bg-gradient-to-r from-blue-50 to-blue-50 border border-blue-100 rounded-lg p-3 mb-3">
+                        <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Total Cost</p>
+                        <p className="text-sm font-bold text-blue-900 mt-1">{formatDualCurrency(c.total_cost, c.currency)}</p>
+                      </div>
+
+                      {/* Notes */}
+                      {c.notes && (
+                        <div className="bg-gray-50 border border-gray-100 rounded-lg p-3 mb-3">
+                          <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider mb-1">Notes</p>
+                          <p className="text-xs text-gray-700">{c.notes}</p>
+                        </div>
+                      )}
+
+                      {/* Linked items */}
+                      <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                        <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider mb-2">Packing List</p>
+                        <div className="flex flex-wrap gap-1.5 min-h-[20px]">
+                          {transactions.filter(t => t.container_id === c.id).length > 0 ? (
+                            transactions.filter(t => t.container_id === c.id).map((t: any) => (
+                              <span key={t.id} className="inline-flex items-center px-2 py-1 rounded text-[10px] font-medium bg-blue-100 text-blue-700 border border-blue-200">
+                                {t.item_name} × {t.quantity}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-[10px] text-gray-400">No stock entry linked yet</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
