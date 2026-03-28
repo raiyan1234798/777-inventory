@@ -4,6 +4,8 @@ import {
   collection, doc, setDoc, deleteDoc, updateDoc,
   writeBatch, onSnapshot, query, orderBy
 } from 'firebase/firestore';
+import { DEFAULT_EXCHANGE_RATES } from '../lib/exchangeRates';
+import { transactionLockManager } from '../lib/transactionLocks';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -114,6 +116,7 @@ export interface AppNotification {
 export interface ShopExpense {
   id: string;
   location_id: string;
+  location_type: 'warehouse' | 'shop'; // FIX: Track whether expense is for warehouse or shop
   amount: number;
   currency: string;
   converted_amount_INR: number;
@@ -138,27 +141,8 @@ export interface User {
   status: 'Active' | 'Inactive';
 }
 
-// ─── Exchange Rates (Approximate, should be updated by admin) ─────────────────
-export const EXCHANGE_RATES: Record<string, number> = {
-  INR: 1,
-  USD: 83.5,
-  EUR: 90.2,
-  GBP: 105.8,
-  CNY: 11.5,
-  PKR: 0.30,
-  SAR: 22.2,   // Saudi Riyal
-  AED: 22.7,   // UAE Dirham
-  JPY: 0.55,
-  CAD: 61.5,
-  AUD: 54.8,
-  SGD: 61.9,
-  KWD: 271.5,
-  OMR: 216.8,
-  BHD: 221.4,
-  QAR: 22.9,
-  MYR: 17.6,
-  THB: 2.3,
-};
+// ─── Exchange Rates (Dynamic, loaded from Firebase) ────────────────────────
+export const EXCHANGE_RATES: Record<string, number> = { ...DEFAULT_EXCHANGE_RATES };
 
 export const CURRENCIES = Object.keys(EXCHANGE_RATES).sort();
 
@@ -305,7 +289,7 @@ interface AppState {
   updateUser: (id: string, data: Partial<User>) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
 
-  // Shop Management
+  // Shop & Warehouse Management
   addExpense: (expense: Omit<ShopExpense, 'id'>) => Promise<void>;
   deleteExpense: (id: string) => Promise<void>;
   setTarget: (target: Omit<ShopTarget, 'id'>) => Promise<void>;
@@ -396,243 +380,261 @@ export const useStore = create<AppState>((set, get) => ({
 
   // ── Stock Entry ────────────────────────────────────────────────────────────
   stockEntry: async ({ container_id, location_id, item_id, item_name, quantity, unit_cost, currency, performed_by }) => {
-    const batch = writeBatch(db);
-    const converted = toINR(unit_cost * quantity, currency);
-    const avgCostINR = toINR(unit_cost, currency);
+    // FIX: Use transaction lock to prevent race conditions on inventory
+    const lockResource = `inventory_${location_id}_${item_id}`;
+    
+    return transactionLockManager.executeWithLock(lockResource, async () => {
+      const batch = writeBatch(db);
+      const converted = toINR(unit_cost * quantity, currency);
+      const avgCostINR = toINR(unit_cost, currency);
 
-    // Update inventory entry
-    const invId = `${location_id}_${item_id}`;
-    const existing = get().getInventoryAt(location_id, item_id);
-    const newQty = (existing?.quantity ?? 0) + quantity;
-    const newAvg = existing
-      ? (existing.avg_cost_INR * existing.quantity + avgCostINR * quantity) / newQty
-      : avgCostINR;
+      // Update inventory entry
+      const invId = `${location_id}_${item_id}`;
+      const existing = get().getInventoryAt(location_id, item_id);
+      const newQty = (existing?.quantity ?? 0) + quantity;
+      const newAvg = existing
+        ? (existing.avg_cost_INR * existing.quantity + avgCostINR * quantity) / newQty
+        : avgCostINR;
 
-    batch.set(doc(db, 'inventory', invId), {
-      id: invId, location_id, item_id, quantity: newQty, avg_cost_INR: newAvg
-    });
-
-    // Log transaction
-    const txRef = doc(collection(db, 'transactions'));
-    batch.set(txRef, {
-      id: txRef.id,
-      type: 'stock_entry',
-      from_location: 'supplier',
-      to_location: location_id,
-      item_id, item_name, quantity, unit_cost, currency,
-      converted_value_INR: converted,
-      performed_by,
-      container_id,
-      timestamp: new Date().toISOString(),
-    });
-
-    // Helper to create a notification in batch
-    const createNotif = (
-      type: AppNotification['type'],
-      location_id: string,
-      message: string,
-      target_roles: AppNotification['target_roles'],
-      extra?: Partial<AppNotification>
-    ) => {
-      const notifRef = doc(collection(db, 'notifications'));
-      batch.set(notifRef, {
-        id: notifRef.id, type, location_id, message,
-        target_roles, status: 'unread',
-        timestamp: new Date().toISOString(),
-        ...extra,
+      batch.set(doc(db, 'inventory', invId), {
+        id: invId, location_id, item_id, quantity: newQty, avg_cost_INR: newAvg
       });
-    };
 
-    // Determine location type and target roles based on location
-    const location = get().locations.find(l => l.id === location_id);
-    const locationType = location?.type ?? 'warehouse';
-    const targetRoles = getTargetRolesForLocationStockEntry(locationType);
+      // Log transaction
+      const txRef = doc(collection(db, 'transactions'));
+      batch.set(txRef, {
+        id: txRef.id,
+        type: 'stock_entry',
+        from_location: 'supplier',
+        to_location: location_id,
+        item_id, item_name, quantity, unit_cost, currency,
+        converted_value_INR: converted,
+        performed_by,
+        container_id,
+        timestamp: new Date().toISOString(),
+      });
 
-    // Stock-entry notification — location-specific staff + admin + super_admin
-    const locationName = location?.name ?? 'Location';
-    const operationMsg = locationType === 'warehouse'
-      ? `📦 Stock Received: ${item_name} — ${quantity} units added to warehouse.`
-      : `📦 Stock Transfer: ${item_name} — ${quantity} units added to shop.`;
+      // Helper to create a notification in batch
+      const createNotif = (
+        type: AppNotification['type'],
+        location_id: string,
+        message: string,
+        target_roles: AppNotification['target_roles'],
+        extra?: Partial<AppNotification>
+      ) => {
+        const notifRef = doc(collection(db, 'notifications'));
+        batch.set(notifRef, {
+          id: notifRef.id, type, location_id, message,
+          target_roles, status: 'unread',
+          timestamp: new Date().toISOString(),
+          ...extra,
+        });
+      };
 
-    createNotif(
-      'stock_entry', location_id,
-      operationMsg,
-      targetRoles,
-      { item_id }
-    );
+      // Determine location type and target roles based on location
+      const location = get().locations.find(l => l.id === location_id);
+      const locationType = location?.type ?? 'warehouse';
+      const targetRoles = getTargetRolesForLocationStockEntry(locationType);
 
-    // Low stock check after stock entry
-    const item = get().items.find(i => i.id === item_id);
-    if (item && newQty < item.min_stock_limit) {
+      // Stock-entry notification — location-specific staff + admin + super_admin
+      const locationName = location?.name ?? 'Location';
+      const operationMsg = locationType === 'warehouse'
+        ? `📦 Stock Received: ${item_name} — ${quantity} units added to warehouse.`
+        : `📦 Stock Transfer: ${item_name} — ${quantity} units added to shop.`;
+
       createNotif(
-        'low_stock', location_id,
-        `⚠️ Low Stock Alert: ${item_name} at ${locationName} is below minimum (${newQty}/${item.min_stock_limit} units). Immediate action required.`,
+        'stock_entry', location_id,
+        operationMsg,
         targetRoles,
         { item_id }
       );
-    }
 
-    await batch.commit();
+      // Low stock check after stock entry
+      const item = get().items.find(i => i.id === item_id);
+      if (item && newQty < item.min_stock_limit) {
+        createNotif(
+          'low_stock', location_id,
+          `⚠️ Low Stock Alert: ${item_name} at ${locationName} is below minimum (${newQty}/${item.min_stock_limit} units). Immediate action required.`,
+          targetRoles,
+          { item_id }
+        );
+      }
+
+      await batch.commit();
+    }, performed_by);
   },
 
   // ── Transfer ───────────────────────────────────────────────────────────────
   transfer: async ({ from_location, to_location, item_id, item_name, quantity, unit_cost_INR, performed_by }) => {
-    const batch = writeBatch(db);
+    // FIX: Use transaction locks on both source and destination to prevent race conditions
+    const fromLock = `inventory_${from_location}_${item_id}`;
+    const toLock = `inventory_${to_location}_${item_id}`;
 
-    const fromEntry = get().getInventoryAt(from_location, item_id);
-    if (!fromEntry || fromEntry.quantity < quantity) throw new Error('Insufficient stock at source.');
+    return transactionLockManager.executeWithLock(fromLock, async () => {
+      return transactionLockManager.executeWithLock(toLock, async () => {
+        const batch = writeBatch(db);
 
-    const fromId = `${from_location}_${item_id}`;
-    const toId = `${to_location}_${item_id}`;
-    const toEntry = get().getInventoryAt(to_location, item_id);
+        const fromEntry = get().getInventoryAt(from_location, item_id);
+        if (!fromEntry || fromEntry.quantity < quantity) throw new Error('Insufficient stock at source.');
 
-    const newFromQty = fromEntry.quantity - quantity;
-    const toQty = (toEntry?.quantity ?? 0) + quantity;
-    const toAvg = toEntry
-      ? (toEntry.avg_cost_INR * toEntry.quantity + unit_cost_INR * quantity) / toQty
-      : unit_cost_INR;
+        const fromId = `${from_location}_${item_id}`;
+        const toId = `${to_location}_${item_id}`;
+        const toEntry = get().getInventoryAt(to_location, item_id);
 
-    batch.set(doc(db, 'inventory', fromId), { ...fromEntry, quantity: newFromQty });
-    batch.set(doc(db, 'inventory', toId), { id: toId, location_id: to_location, item_id, quantity: toQty, avg_cost_INR: toAvg });
+        const newFromQty = fromEntry.quantity - quantity;
+        const toQty = (toEntry?.quantity ?? 0) + quantity;
+        const toAvg = toEntry
+          ? (toEntry.avg_cost_INR * toEntry.quantity + unit_cost_INR * quantity) / toQty
+          : unit_cost_INR;
 
-    const txRef = doc(collection(db, 'transactions'));
-    batch.set(txRef, {
-      id: txRef.id, type: 'transfer',
-      from_location, to_location, item_id, item_name, quantity,
-      unit_cost: unit_cost_INR, currency: 'INR',
-      converted_value_INR: unit_cost_INR * quantity,
-      performed_by,
-      timestamp: new Date().toISOString(),
-    });
+        batch.set(doc(db, 'inventory', fromId), { ...fromEntry, quantity: newFromQty });
+        batch.set(doc(db, 'inventory', toId), { id: toId, location_id: to_location, item_id, quantity: toQty, avg_cost_INR: toAvg });
 
-    // Low stock check for source after transfer
-    const item = get().items.find(i => i.id === item_id);
+        const txRef = doc(collection(db, 'transactions'));
+        batch.set(txRef, {
+          id: txRef.id, type: 'transfer',
+          from_location, to_location, item_id, item_name, quantity,
+          unit_cost: unit_cost_INR, currency: 'INR',
+          converted_value_INR: unit_cost_INR * quantity,
+          performed_by,
+          timestamp: new Date().toISOString(),
+        });
 
-    // Helper (local)
-    const createNotif2 = (
-      type: AppNotification['type'],
-      location_id: string,
-      message: string,
-      target_roles: AppNotification['target_roles'],
-      extra?: Partial<AppNotification>
-    ) => {
-      const notifRef = doc(collection(db, 'notifications'));
-      batch.set(notifRef, {
-        id: notifRef.id, type, location_id, message,
-        target_roles, status: 'unread',
-        timestamp: new Date().toISOString(),
-        ...extra,
-      });
-    };
+        // Low stock check for source after transfer
+        const item = get().items.find(i => i.id === item_id);
 
-    // Transfer notification — notify location-specific staff based on location type
-    const fromLoc = get().locations.find(l => l.id === from_location);
-    const toLoc = get().locations.find(l => l.id === to_location);
-    const fromName = fromLoc?.name ?? from_location;
-    const toName = toLoc?.name ?? to_location;
+        // Helper (local)
+        const createNotif2 = (
+          type: AppNotification['type'],
+          location_id: string,
+          message: string,
+          target_roles: AppNotification['target_roles'],
+          extra?: Partial<AppNotification>
+        ) => {
+          const notifRef = doc(collection(db, 'notifications'));
+          batch.set(notifRef, {
+            id: notifRef.id, type, location_id, message,
+            target_roles, status: 'unread',
+            timestamp: new Date().toISOString(),
+            ...extra,
+          });
+        };
 
-    // Get target roles for source and destination based on their location types
-    const fromTargetRoles = getTargetRolesForLocationStockEntry(fromLoc?.type ?? 'warehouse');
-    const toTargetRoles = getTargetRolesForLocationStockEntry(toLoc?.type ?? 'warehouse');
+        // Transfer notification — notify location-specific staff based on location type
+        const fromLoc = get().locations.find(l => l.id === from_location);
+        const toLoc = get().locations.find(l => l.id === to_location);
+        const fromName = fromLoc?.name ?? from_location;
+        const toName = toLoc?.name ?? to_location;
 
-    // Notify source location staff
-    createNotif2(
-      'transfer', from_location,
-      `🔄 Transfer Out: ${item_name} — ${quantity} units transferred from ${fromName} → ${toName} by ${performed_by}.`,
-      fromTargetRoles,
-      { item_id, target_location_id: to_location }
-    );
-    // Notify destination location staff separately
-    createNotif2(
-      'transfer', to_location,
-      `📥 Transfer In: ${item_name} — ${quantity} units received at ${toName} from ${fromName} by ${performed_by}.`,
-      toTargetRoles,
-      { item_id, target_location_id: from_location }
-    );
+        // Get target roles for source and destination based on their location types
+        const fromTargetRoles = getTargetRolesForLocationStockEntry(fromLoc?.type ?? 'warehouse');
+        const toTargetRoles = getTargetRolesForLocationStockEntry(toLoc?.type ?? 'warehouse');
 
-    if (item && newFromQty < item.min_stock_limit) {
-      createNotif2(
-        'low_stock', from_location,
-        `⚠️ Low Stock Alert: ${item_name} at ${fromName} is below minimum after transfer (${newFromQty}/${item.min_stock_limit} units). Immediate action required.`,
-        fromTargetRoles,
-        { item_id }
-      );
-    }
+        // Notify source location staff
+        createNotif2(
+          'transfer', from_location,
+          `🔄 Transfer Out: ${item_name} — ${quantity} units transferred from ${fromName} → ${toName} by ${performed_by}.`,
+          fromTargetRoles,
+          { item_id, target_location_id: to_location }
+        );
+        // Notify destination location staff separately
+        createNotif2(
+          'transfer', to_location,
+          `📥 Transfer In: ${item_name} — ${quantity} units received at ${toName} from ${fromName} by ${performed_by}.`,
+          toTargetRoles,
+          { item_id, target_location_id: from_location }
+        );
 
-    await batch.commit();
+        if (item && newFromQty < item.min_stock_limit) {
+          createNotif2(
+            'low_stock', from_location,
+            `⚠️ Low Stock Alert: ${item_name} at ${fromName} is below minimum after transfer (${newFromQty}/${item.min_stock_limit} units). Immediate action required.`,
+            fromTargetRoles,
+            { item_id }
+          );
+        }
+
+        await batch.commit();
+      }, performed_by);
+    }, performed_by);
   },
 
   // ── Sale ───────────────────────────────────────────────────────────────────
   recordSale: async ({ item_id, item_name, location_id, quantity, selling_price, currency, sold_by }) => {
-    const batch = writeBatch(db);
+    // FIX: Use transaction lock to prevent overselling
+    const lockResource = `inventory_${location_id}_${item_id}`;
+    
+    return transactionLockManager.executeWithLock(lockResource, async () => {
+      const batch = writeBatch(db);
 
-    const invEntry = get().getInventoryAt(location_id, item_id);
-    if (!invEntry || invEntry.quantity < quantity) throw new Error('Insufficient stock for sale.');
+      const invEntry = get().getInventoryAt(location_id, item_id);
+      if (!invEntry || invEntry.quantity < quantity) throw new Error('Insufficient stock for sale.');
 
-    const invId = `${location_id}_${item_id}`;
-    const newQty = invEntry.quantity - quantity;
-    batch.set(doc(db, 'inventory', invId), { ...invEntry, quantity: newQty });
+      const invId = `${location_id}_${item_id}`;
+      const newQty = invEntry.quantity - quantity;
+      batch.set(doc(db, 'inventory', invId), { ...invEntry, quantity: newQty });
 
-    const convertedPriceINR = toINR(selling_price * quantity, currency);
-    const profitINR = convertedPriceINR - invEntry.avg_cost_INR * quantity;
+      const convertedPriceINR = toINR(selling_price * quantity, currency);
+      const profitINR = convertedPriceINR - invEntry.avg_cost_INR * quantity;
 
-    const saleRef = doc(collection(db, 'sales'));
-    batch.set(saleRef, {
-      id: saleRef.id, item_id, item_name, location_id, quantity,
-      selling_price, currency, converted_price_INR: convertedPriceINR,
-      avg_cost_INR: invEntry.avg_cost_INR, profit_INR: profitINR,
-      sold_by, timestamp: new Date().toISOString(),
-    });
-
-    const txRef = doc(collection(db, 'transactions'));
-    batch.set(txRef, {
-      id: txRef.id, type: 'sale',
-      from_location: location_id, to_location: 'customer',
-      item_id, item_name, quantity, unit_cost: selling_price, currency,
-      converted_value_INR: convertedPriceINR, performed_by: sold_by,
-      timestamp: new Date().toISOString(),
-    });
-
-    // Sale notification + low stock check
-    const item = get().items.find(i => i.id === item_id);
-    const saleLoc = get().locations.find(l => l.id === location_id);
-    const saleLocName = saleLoc?.name ?? location_id;
-    const saleTargetRoles = getTargetRolesForLocationStockEntry(saleLoc?.type ?? 'shop');
-
-    const createNotif3 = (
-      type: AppNotification['type'],
-      loc_id: string,
-      message: string,
-      target_roles: AppNotification['target_roles'],
-      extra?: Partial<AppNotification>
-    ) => {
-      const notifRef = doc(collection(db, 'notifications'));
-      batch.set(notifRef, {
-        id: notifRef.id, type, location_id: loc_id, message,
-        target_roles, status: 'unread',
-        timestamp: new Date().toISOString(),
-        ...extra,
+      const saleRef = doc(collection(db, 'sales'));
+      batch.set(saleRef, {
+        id: saleRef.id, item_id, item_name, location_id, quantity,
+        selling_price, currency, converted_price_INR: convertedPriceINR,
+        avg_cost_INR: invEntry.avg_cost_INR, profit_INR: profitINR,
+        sold_by, timestamp: new Date().toISOString(),
       });
-    };
 
-    // Sale notification — location staff + admin + super_admin
-    createNotif3(
-      'sale', location_id,
-      `🛍️ Sale Recorded: ${quantity}x ${item_name} sold at ${saleLocName} by ${sold_by}.`,
-      saleTargetRoles,
-      { item_id }
-    );
+      const txRef = doc(collection(db, 'transactions'));
+      batch.set(txRef, {
+        id: txRef.id, type: 'sale',
+        from_location: location_id, to_location: 'customer',
+        item_id, item_name, quantity, unit_cost: selling_price, currency,
+        converted_value_INR: convertedPriceINR, performed_by: sold_by,
+        timestamp: new Date().toISOString(),
+      });
 
-    if (item && newQty < item.min_stock_limit) {
+      // Sale notification + low stock check
+      const item = get().items.find(i => i.id === item_id);
+      const saleLoc = get().locations.find(l => l.id === location_id);
+      const saleLocName = saleLoc?.name ?? location_id;
+      const saleTargetRoles = getTargetRolesForLocationStockEntry(saleLoc?.type ?? 'shop');
+
+      const createNotif3 = (
+        type: AppNotification['type'],
+        loc_id: string,
+        message: string,
+        target_roles: AppNotification['target_roles'],
+        extra?: Partial<AppNotification>
+      ) => {
+        const notifRef = doc(collection(db, 'notifications'));
+        batch.set(notifRef, {
+          id: notifRef.id, type, location_id: loc_id, message,
+          target_roles, status: 'unread',
+          timestamp: new Date().toISOString(),
+          ...extra,
+        });
+      };
+
+      // Sale notification — location staff + admin + super_admin
       createNotif3(
-        'low_stock', location_id,
-        `⚠️ Low Stock Alert: ${item_name} at ${saleLocName} is below minimum after sale (${newQty}/${item.min_stock_limit} units). Immediate restock needed.`,
+        'sale', location_id,
+        `🛍️ Sale Recorded: ${quantity}x ${item_name} sold at ${saleLocName} by ${sold_by}.`,
         saleTargetRoles,
         { item_id }
       );
-    }
 
-    await batch.commit();
+      if (item && newQty < item.min_stock_limit) {
+        createNotif3(
+          'low_stock', location_id,
+          `⚠️ Low Stock Alert: ${item_name} at ${saleLocName} is below minimum after sale (${newQty}/${item.min_stock_limit} units). Immediate restock needed.`,
+          saleTargetRoles,
+          { item_id }
+        );
+      }
+
+      await batch.commit();
+    }, sold_by);
   },
 
   // ── Return ─────────────────────────────────────────────────────────────────
@@ -646,8 +648,8 @@ export const useStore = create<AppState>((set, get) => ({
       const existing = get().getInventoryAt(ret.location_id, ret.item_id);
       const newQty = (existing?.quantity ?? 0) + ret.quantity;
       
-      // If we restock, we typically don't change the avg cost as it's a return of the same item
-      // unless the user specifies a value, but here we assume it's just a reversal.
+      // FIX: When restocking, maintain the original avg_cost (don't change it)
+      // This assumes the returned items have the same cost as the original batch
       if (existing) {
         batch.set(doc(db, 'inventory', invId), { ...existing, quantity: newQty });
       } else {
@@ -656,12 +658,16 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
 
+    // FIX: Record the cost impact of the return properly
+    const refSale = get().sales.find(s => s.id === ret.ref_transaction_id);
+    const returnCostINR = refSale ? refSale.avg_cost_INR * ret.quantity : 0;
+
     const txRef = doc(collection(db, 'transactions'));
     batch.set(txRef, {
       id: txRef.id, type: 'return',
       from_location: 'customer', to_location: ret.location_id,
       item_id: ret.item_id, item_name: ret.item_name, quantity: ret.quantity,
-      unit_cost: 0, currency: 'INR', converted_value_INR: 0,
+      unit_cost: returnCostINR, currency: 'INR', converted_value_INR: returnCostINR * ret.quantity,
       performed_by: 'system',
       timestamp: new Date().toISOString(),
     });
@@ -702,43 +708,63 @@ export const useStore = create<AppState>((set, get) => ({
   initFirestoreSync: () => {
     set({ isSyncing: true });
     
+    let loadedCollections = 0;
+    const totalCollections = 12;
+    
+    const checkSyncComplete = () => {
+      loadedCollections++;
+      if (loadedCollections === totalCollections) {
+        set({ isSyncing: false }); // FIX: Only set to false once all listeners are ready
+      }
+    };
+    
     onSnapshot(collection(db, 'locations'), snap => {
       set({ locations: snap.docs.map(d => ({ id: d.id, ...d.data() } as Location)) });
+      checkSyncComplete();
     });
     onSnapshot(collection(db, 'brands'), snap => {
       set({ brands: snap.docs.map(d => ({ id: d.id, ...d.data() } as Brand)) });
+      checkSyncComplete();
     });
     onSnapshot(collection(db, 'items'), snap => {
       set({ items: snap.docs.map(d => ({ id: d.id, ...d.data() } as Item)) });
+      checkSyncComplete();
     });
     onSnapshot(collection(db, 'inventory'), snap => {
       set({ inventory: snap.docs.map(d => ({ id: d.id, ...d.data() } as InventoryEntry)) });
+      checkSyncComplete();
     });
     onSnapshot(query(collection(db, 'containers'), orderBy('date', 'desc')), snap => {
       set({ containers: snap.docs.map(d => ({ id: d.id, ...d.data() } as Container)) });
+      checkSyncComplete();
     });
     onSnapshot(query(collection(db, 'transactions'), orderBy('timestamp', 'desc')), snap => {
       set({ transactions: snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)) });
+      checkSyncComplete();
     });
     onSnapshot(query(collection(db, 'sales'), orderBy('timestamp', 'desc')), snap => {
       set({ sales: snap.docs.map(d => ({ id: d.id, ...d.data() } as Sale)) });
+      checkSyncComplete();
     });
     onSnapshot(query(collection(db, 'returns'), orderBy('timestamp', 'desc')), snap => {
       set({ returns: snap.docs.map(d => ({ id: d.id, ...d.data() } as ReturnRecord)) });
+      checkSyncComplete();
     });
     onSnapshot(query(collection(db, 'notifications'), orderBy('timestamp', 'desc')), snap => {
       set({ notifications: snap.docs.map(d => ({ id: d.id, ...d.data() } as AppNotification)) });
+      checkSyncComplete();
     });
     onSnapshot(collection(db, 'users'), snap => {
       set({ users: snap.docs.map(d => ({ id: d.id, ...d.data() } as User)) });
+      checkSyncComplete();
     });
     onSnapshot(collection(db, 'expenses'), snap => {
       set({ expenses: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense)) });
+      checkSyncComplete();
     });
     onSnapshot(collection(db, 'targets'), snap => {
       set({ targets: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopTarget)) });
+      checkSyncComplete();
     });
-
-    set({ isSyncing: false });
   },
 }));

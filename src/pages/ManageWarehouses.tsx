@@ -93,6 +93,7 @@ export default function ManageWarehouses() {
     try {
       await addExpense({
         ...expForm,
+        location_type: 'warehouse', // FIX: Explicitly set location_type for proper categorization
         converted_amount_INR: toINR(expForm.amount, expForm.currency)
       });
       setIsExpModal(false);

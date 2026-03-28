@@ -90,6 +90,7 @@ export default function ManageShops() {
     try {
       await addExpense({
         ...expForm,
+        location_type: 'shop', // FIX: Explicitly set location_type for proper categorization
         converted_amount_INR: toINR(expForm.amount, expForm.currency)
       });
       setIsExpModal(false);
