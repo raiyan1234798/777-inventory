@@ -167,64 +167,120 @@ export default function Shops() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 lg:gap-8">
-        {/* Shop Inventory Table */}
-        <div className="xl:col-span-2 space-y-4">
-           <div className="flex items-center justify-between px-2">
-            <h2 className="text-base font-extrabold text-gray-900 flex items-center gap-2.5">
-               <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-               Node Object Mapping
-            </h2>
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-300">{shopInventoryRows.length} Vectors Identified</p>
-          </div>
-          <div className="table-container">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left min-w-[600px]">
-                <thead className="bg-gray-50 text-[10px] uppercase text-gray-400 font-black tracking-widest">
-                  <tr>
-                    <th className="px-6 py-4">Descriptor</th>
-                    <th className="px-6 py-4">Node Anchor</th>
-                    <th className="px-6 py-4 text-right">Commitment</th>
-                    <th className="px-6 py-4 text-right">Landed Cost</th>
-                    <th className="px-6 py-4 text-center">Status Vane</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50 bg-white">
-                  {shopInventoryRows.length === 0 ? (
-                    <tr><td colSpan={5} className="px-6 py-20 text-center flex flex-col items-center">
-                      <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-                        <Store className="w-8 h-8 opacity-10" />
-                      </div>
-                      <p className="font-extrabold text-gray-700 tracking-tight">Node Buffer Empty</p>
-                      <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Move objects from secondary nodes via Transfers.</p>
-                    </td></tr>
-                  ) : shopInventoryRows.map(r => (
-                    <tr key={r.id} className={clsx("hover:bg-gray-50/50 transition-colors group", r.isLow && 'bg-red-50/20')}>
-                      <td className="px-6 py-4">
-                        <p className="text-base font-extrabold text-gray-900 group-hover:text-primary transition-colors tracking-tight">{r.item.name}</p>
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">{r.item.category} · {r.item.sku}</p>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                           <div className="w-2.5 h-2.5 rounded-full bg-gray-200" />
-                           <span className="text-sm font-bold text-gray-600">{r.loc.name}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right font-black text-gray-900 text-lg tracking-tighter tabular-nums">{r.quantity}</td>
-                      <td className="px-6 py-4 text-right tabular-nums text-gray-500 font-bold">{formatCurrency(r.avg_cost_INR)}</td>
-                      <td className="px-6 py-4 text-center">
-                        {r.isLow
-                          ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-red-50 text-red-600 border border-red-100"><AlertTriangle className="w-3 h-3" /> Critical</span>
-                          : <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-600 border border-emerald-100">Synchronized</span>
-                        }
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 lg:gap-8">
+         {/* Shop Inventory Table */}
+         <div className="xl:col-span-2 space-y-4">
+            <div className="flex items-center justify-between px-2">
+             <h2 className="text-base font-extrabold text-gray-900 flex items-center gap-2.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+                Node Object Mapping
+             </h2>
+             <p className="text-[10px] font-black uppercase tracking-widest text-gray-300">{shopInventoryRows.length} Vectors Identified</p>
+           </div>
+           
+           {/* Desktop Table View */}
+           <div className="table-container hidden lg:block">
+             <div className="overflow-x-auto">
+               <table className="w-full text-sm text-left min-w-[600px]">
+                 <thead className="bg-gray-50 text-[10px] uppercase text-gray-400 font-black tracking-widest">
+                   <tr>
+                     <th className="px-6 py-4">Descriptor</th>
+                     <th className="px-6 py-4">Node Anchor</th>
+                     <th className="px-6 py-4 text-right">Commitment</th>
+                     <th className="px-6 py-4 text-right">Landed Cost</th>
+                     <th className="px-6 py-4 text-center">Status Vane</th>
+                   </tr>
+                 </thead>
+                 <tbody className="divide-y divide-gray-50 bg-white">
+                   {shopInventoryRows.length === 0 ? (
+                     <tr><td colSpan={5} className="px-6 py-20 text-center flex flex-col items-center">
+                       <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+                         <Store className="w-8 h-8 opacity-10" />
+                       </div>
+                       <p className="font-extrabold text-gray-700 tracking-tight">Node Buffer Empty</p>
+                       <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Move objects from secondary nodes via Transfers.</p>
+                     </td></tr>
+                   ) : shopInventoryRows.map(r => (
+                     <tr key={r.id} className={clsx("hover:bg-gray-50/50 transition-colors group", r.isLow && 'bg-red-50/20')}>
+                       <td className="px-6 py-4">
+                         <p className="text-base font-extrabold text-gray-900 group-hover:text-primary transition-colors tracking-tight">{r.item.name}</p>
+                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">{r.item.category} · {r.item.sku}</p>
+                       </td>
+                       <td className="px-6 py-4">
+                         <div className="flex items-center gap-2">
+                            <div className="w-2.5 h-2.5 rounded-full bg-gray-200" />
+                            <span className="text-sm font-bold text-gray-600">{r.loc.name}</span>
+                         </div>
+                       </td>
+                       <td className="px-6 py-4 text-right font-black text-gray-900 text-lg tracking-tighter tabular-nums">{r.quantity}</td>
+                       <td className="px-6 py-4 text-right tabular-nums text-gray-500 font-bold">{formatCurrency(r.avg_cost_INR)}</td>
+                       <td className="px-6 py-4 text-center">
+                         {r.isLow
+                           ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-red-50 text-red-600 border border-red-100"><AlertTriangle className="w-3 h-3" /> Critical</span>
+                           : <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-600 border border-emerald-100">Synchronized</span>
+                         }
+                       </td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+           </div>
+
+           {/* Mobile & Tablet Card View */}
+           <div className="lg:hidden p-4 sm:p-5">
+             {shopInventoryRows.length === 0 ? (
+               <div className="text-center py-12 flex flex-col items-center">
+                 <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+                   <Store className="w-8 h-8 opacity-10" />
+                 </div>
+                 <p className="font-extrabold text-gray-700 tracking-tight">Node Buffer Empty</p>
+                 <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Move objects from secondary nodes via Transfers.</p>
+               </div>
+             ) : (
+               <div className="space-y-3">
+                 {shopInventoryRows.map(r => (
+                   <div key={r.id} className={clsx("bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all", r.isLow && 'border-red-200 bg-red-50/30')}>
+                     <div className="flex justify-between items-start gap-2 mb-3">
+                       <div className="flex-1 min-w-0">
+                         <h3 className="font-bold text-gray-900 text-sm">{r.item.name}</h3>
+                         <p className="text-xs text-gray-500 mt-1 font-mono">{r.item.sku}</p>
+                       </div>
+                     </div>
+
+                     <div className="grid grid-cols-2 gap-2 mb-3">
+                       <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                         <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Qty</p>
+                         <p className="text-sm font-black text-blue-900 mt-1 tabular-nums">{r.quantity}</p>
+                       </div>
+                       <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100">
+                         <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Cost</p>
+                         <p className="text-sm font-black text-emerald-900 mt-1">{formatCurrency(r.avg_cost_INR)}</p>
+                       </div>
+                     </div>
+
+                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-100 mb-3">
+                       <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider">Shop</p>
+                       <p className="text-xs font-bold text-gray-900 mt-1">{r.loc.name}</p>
+                     </div>
+
+                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-100 mb-3">
+                       <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider">Category</p>
+                       <p className="text-xs font-bold text-gray-900 mt-1">{r.item.category}</p>
+                     </div>
+
+                     <div className="flex items-center justify-center">
+                       {r.isLow
+                         ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-red-50 text-red-600 border border-red-100"><AlertTriangle className="w-3 h-3" /> Critical</span>
+                         : <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-600 border border-emerald-100">Synchronized</span>
+                       }
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             )}
+           </div>
+         </div>
 
         {/* Recent Sales Column */}
         <div className="space-y-4">

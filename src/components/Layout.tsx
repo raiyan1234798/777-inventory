@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Zap,
   Building2,
+  DollarSign,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '../store/authStore';
@@ -29,6 +30,7 @@ const navItems = [
   { name: 'Finance', path: '/finance', icon: PieChart },
   { name: 'Manage Warehouses', path: '/manage-warehouses', icon: Building2 },
   { name: 'Manage Shops', path: '/manage-shops', icon: Globe },
+  { name: 'Exchange Rates', path: '/exchange-rates', icon: DollarSign },
   { name: 'Users', path: '/users', icon: Users },
 ];
 

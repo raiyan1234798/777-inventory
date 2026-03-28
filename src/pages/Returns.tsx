@@ -137,82 +137,138 @@ export default function Returns() {
           ))}
         </div>
 
-        {/* Table/Card Container */}
-        <div className="table-container">
-           <div className="p-5 border-b border-gray-50 bg-gray-50/30 flex items-center justify-between">
-             <h2 className="text-[11px] font-black text-gray-900 uppercase tracking-widest">Return Control Logs</h2>
-             <div className="flex items-center gap-2 sm:gap-4">
-                <span className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">{filteredReturns.length} Records</span>
-                <button className="text-gray-300 hover:text-primary transition-colors"><Search className="w-4 h-4" /></button>
-             </div>
-           </div>
-           <div className="overflow-x-auto">
-             <table className="w-full text-sm text-left min-w-[900px]">
-               <thead className="bg-gray-50/50 text-[10px] uppercase text-gray-400 font-bold tracking-wider">
-                 <tr>
-                   <th className="px-6 py-4">Item Node</th>
-                   <th className="px-6 py-4">Sequence</th>
-                   <th className="px-6 py-4">Location Node</th>
-                   <th className="px-6 py-4 text-right">Units</th>
-                   <th className="px-6 py-4">Status Flag</th>
-                   <th className="px-6 py-4">Timestamp</th>
-                 </tr>
-               </thead>
-               <tbody className="divide-y divide-gray-50 bg-white">
-                 {filteredReturns.length === 0 ? (
-                   <tr>
-                     <td colSpan={7} className="px-6 py-20 text-center flex flex-col items-center justify-center">
-                       <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-                         <RotateCcw className="w-8 h-8 opacity-10" />
-                       </div>
-                       <p className="font-extrabold text-gray-700 tracking-tight">Zero Reversal History</p>
-                       <p className="text-xs text-gray-400 mt-1 uppercase tracking-tighter">All initial nodes remain committed.</p>
-                     </td>
-                   </tr>
-                 ) : (
-                  [...filteredReturns].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).map(r => (
-                   <tr key={r.id} className="hover:bg-gray-50/50 transition-colors group">
-                     <td className="px-6 py-5">
-                       <p className="font-extrabold text-gray-900 tracking-tight text-base group-hover:text-primary transition-colors">{r.item_name}</p>
-                       <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5 line-clamp-1 italic">{r.reason || 'No causal log provided'}</p>
-                     </td>
-                     <td className="px-6 py-5">
-                       <span className={clsx(
-                         "px-3 py-1 rounded-md text-[9px] font-black uppercase tracking-widest whitespace-nowrap",
-                         r.type === 'sale_return' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'
-                       )}>
-                         {r.type === 'sale_return' ? 'Sale Reverse' : 'Node Flowback'}
-                       </span>
-                     </td>
-                     <td className="px-6 py-5">
-                       <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 bg-gray-50 rounded-md flex items-center justify-center text-gray-400">
-                             <MapPin className="w-3 h-3" />
+         {/* Table/Card Container */}
+         <div className="space-y-4">
+            <div className="p-5 border-b border-gray-50 bg-gray-50/30 flex items-center justify-between">
+              <h2 className="text-[11px] font-black text-gray-900 uppercase tracking-widest">Return Control Logs</h2>
+              <div className="flex items-center gap-2 sm:gap-4">
+                 <span className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">{filteredReturns.length} Records</span>
+                 <button className="text-gray-300 hover:text-primary transition-colors"><Search className="w-4 h-4" /></button>
+              </div>
+            </div>
+            
+            {/* Desktop Table View */}
+            <div className="table-container hidden lg:block">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left min-w-[900px]">
+                  <thead className="bg-gray-50/50 text-[10px] uppercase text-gray-400 font-bold tracking-wider">
+                    <tr>
+                      <th className="px-6 py-4">Item Node</th>
+                      <th className="px-6 py-4">Sequence</th>
+                      <th className="px-6 py-4">Location Node</th>
+                      <th className="px-6 py-4 text-right">Units</th>
+                      <th className="px-6 py-4">Status Flag</th>
+                      <th className="px-6 py-4">Timestamp</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50 bg-white">
+                    {filteredReturns.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-6 py-20 text-center flex flex-col items-center justify-center">
+                          <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+                            <RotateCcw className="w-8 h-8 opacity-10" />
                           </div>
-                          <span className="text-gray-600 font-bold tracking-tight">{locations.find(l => l.id === r.location_id)?.name ?? r.location_id}</span>
-                       </div>
-                     </td>
-                     <td className="px-6 py-5 text-right font-black text-gray-900 text-lg tracking-tighter">{r.quantity}</td>
-                     <td className="px-6 py-5">
-                       <div className="flex items-center gap-2">
+                          <p className="font-extrabold text-gray-700 tracking-tight">Zero Reversal History</p>
+                          <p className="text-xs text-gray-400 mt-1 uppercase tracking-tighter">All initial nodes remain committed.</p>
+                        </td>
+                      </tr>
+                    ) : (
+                     [...filteredReturns].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).map(r => (
+                      <tr key={r.id} className="hover:bg-gray-50/50 transition-colors group">
+                        <td className="px-6 py-5">
+                          <p className="font-extrabold text-gray-900 tracking-tight text-base group-hover:text-primary transition-colors">{r.item_name}</p>
+                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5 line-clamp-1 italic">{r.reason || 'No causal log provided'}</p>
+                        </td>
+                        <td className="px-6 py-5">
+                          <span className={clsx(
+                            "px-3 py-1 rounded-md text-[9px] font-black uppercase tracking-widest whitespace-nowrap",
+                            r.type === 'sale_return' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'
+                          )}>
+                            {r.type === 'sale_return' ? 'Sale Reverse' : 'Node Flowback'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="flex items-center gap-2">
+                             <div className="w-6 h-6 bg-gray-50 rounded-md flex items-center justify-center text-gray-400">
+                                <MapPin className="w-3 h-3" />
+                             </div>
+                             <span className="text-gray-600 font-bold tracking-tight">{locations.find(l => l.id === r.location_id)?.name ?? r.location_id}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-5 text-right font-black text-gray-900 text-lg tracking-tighter">{r.quantity}</td>
+                        <td className="px-6 py-5">
+                          <div className="flex items-center gap-2">
+                           <span className={clsx(
+                             "px-3 py-1 rounded-full text-[10px] font-black shadow-sm",
+                             r.status === 'Restocked' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
+                           )}>
+                             {r.status}
+                           </span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-5 text-gray-400 text-[11px] font-bold tabular-nums">
+                          {format(new Date(r.timestamp), 'MMM dd, yyyy HH:mm')}
+                        </td>
+                      </tr>
+                    ))
+                   )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Mobile & Tablet Card View */}
+            <div className="lg:hidden p-4 sm:p-5">
+              {filteredReturns.length === 0 ? (
+                <div className="text-center py-12 flex flex-col items-center">
+                  <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+                    <RotateCcw className="w-8 h-8 opacity-10" />
+                  </div>
+                  <p className="font-extrabold text-gray-700 tracking-tight">Zero Reversal History</p>
+                  <p className="text-xs text-gray-400 mt-1 uppercase tracking-tighter">All initial nodes remain committed.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {[...filteredReturns].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).map(r => (
+                    <div key={r.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
+                      <div className="flex justify-between items-start gap-2 mb-3">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-bold text-gray-900 text-sm">{r.item_name}</h3>
+                          <p className="text-xs text-gray-500 mt-1 italic">{r.reason || 'No causal log provided'}</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mb-3">
+                        <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                          <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Units</p>
+                          <p className="text-sm font-black text-blue-900 mt-1 tabular-nums">{r.quantity}</p>
+                        </div>
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                          <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider">Type</p>
+                          <p className="text-xs font-bold text-gray-900 mt-1">{r.type === 'sale_return' ? 'Sale' : 'Flowback'}</p>
+                        </div>
+                      </div>
+
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-100 mb-3">
+                        <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider">Location</p>
+                        <p className="text-xs font-bold text-gray-900 mt-1">{locations.find(l => l.id === r.location_id)?.name ?? r.location_id}</p>
+                      </div>
+
+                      <div className="flex items-center justify-between">
                         <span className={clsx(
                           "px-3 py-1 rounded-full text-[10px] font-black shadow-sm",
                           r.status === 'Restocked' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
                         )}>
                           {r.status}
                         </span>
-                       </div>
-                     </td>
-                     <td className="px-6 py-5 text-gray-400 text-[11px] font-bold tabular-nums">
-                       {format(new Date(r.timestamp), 'MMM dd, yyyy HH:mm')}
-                     </td>
-                   </tr>
-                 ))
-                )}
-               </tbody>
-             </table>
-           </div>
-        </div>
+                        <p className="text-gray-400 text-[9px] font-bold">{format(new Date(r.timestamp), 'MMM dd, HH:mm')}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+         </div>
       </div>
 
       {/* Return Modal Updated for Responsive Inputs */}

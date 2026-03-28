@@ -196,51 +196,100 @@ export default function Dashboard() {
 
       {/* Main Content Grid */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 lg:gap-8">
-        {/* Recent Transactions */}
-        <div className="xl:col-span-2 space-y-4">
-          <div className="flex items-center justify-between px-2">
-            <h2 className="text-base font-extrabold text-gray-900 flex items-center gap-2.5">
-               <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-               Recent Activity Flow
-            </h2>
-            <Link to="/transfers" className="text-[10px] font-black uppercase tracking-wider text-primary hover:underline">View All Records</Link>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            {recentTransactions.length === 0 ? (
-              <div className="py-20 text-center text-gray-400">
-                <Activity className="w-12 h-12 mx-auto mb-4 opacity-10" />
-                <p className="font-bold text-gray-500">No activity logged yet.</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-50">
-                {recentTransactions.map(tx => {
-                  const meta = txTypeIcon[tx.type] ?? txTypeIcon.transfer;
-                  return (
-                    <div key={tx.id} className="p-4 sm:p-5 flex items-center gap-4 hover:bg-gray-50/50 transition-all group cursor-pointer">
-                      <div className={clsx("w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-110", meta.color)}>
-                        {meta.icon}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-gray-900 truncate tracking-tight">{tx.item_name}</p>
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tight mt-1 flex items-center gap-1.5">
-                          <span className="truncate max-w-[100px]">{getLocationName(tx.from_location)}</span>
-                          <ChevronRight className="w-2.5 h-2.5" />
-                          <span className="truncate max-w-[100px]">{getLocationName(tx.to_location)}</span>
-                          <span className="ml-1 text-gray-300">|</span>
-                          <span className="text-primary">{tx.quantity} units</span>
-                        </p>
-                      </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-black text-gray-900">{formatDualCurrency(tx.unit_cost * tx.quantity, tx.currency)}</p>
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">{format(new Date(tx.timestamp), 'MMM dd')}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
+       {/* Recent Transactions */}
+         <div className="xl:col-span-2 space-y-4">
+           <div className="flex items-center justify-between px-2">
+             <h2 className="text-base font-extrabold text-gray-900 flex items-center gap-2.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+                Recent Activity Flow
+             </h2>
+             <Link to="/transfers" className="text-[10px] font-black uppercase tracking-wider text-primary hover:underline">View All Records</Link>
+           </div>
+           
+           {/* Desktop List View */}
+           <div className="hidden lg:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+             {recentTransactions.length === 0 ? (
+               <div className="py-20 text-center text-gray-400">
+                 <Activity className="w-12 h-12 mx-auto mb-4 opacity-10" />
+                 <p className="font-bold text-gray-500">No activity logged yet.</p>
+               </div>
+             ) : (
+               <div className="divide-y divide-gray-50">
+                 {recentTransactions.map(tx => {
+                   const meta = txTypeIcon[tx.type] ?? txTypeIcon.transfer;
+                   return (
+                     <div key={tx.id} className="p-4 sm:p-5 flex items-center gap-4 hover:bg-gray-50/50 transition-all group cursor-pointer">
+                       <div className={clsx("w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-110", meta.color)}>
+                         {meta.icon}
+                       </div>
+                       <div className="flex-1 min-w-0">
+                         <p className="text-sm font-bold text-gray-900 truncate tracking-tight">{tx.item_name}</p>
+                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tight mt-1 flex items-center gap-1.5">
+                           <span className="truncate max-w-[100px]">{getLocationName(tx.from_location)}</span>
+                           <ChevronRight className="w-2.5 h-2.5" />
+                           <span className="truncate max-w-[100px]">{getLocationName(tx.to_location)}</span>
+                           <span className="ml-1 text-gray-300">|</span>
+                           <span className="text-primary">{tx.quantity} units</span>
+                         </p>
+                       </div>
+                       <div className="text-right flex-shrink-0">
+                         <p className="text-sm font-black text-gray-900">{formatDualCurrency(tx.unit_cost * tx.quantity, tx.currency)}</p>
+                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">{format(new Date(tx.timestamp), 'MMM dd')}</p>
+                       </div>
+                     </div>
+                   );
+                 })}
+               </div>
+             )}
+           </div>
+
+           {/* Mobile & Tablet Card View */}
+           <div className="lg:hidden space-y-3">
+             {recentTransactions.length === 0 ? (
+               <div className="bg-white rounded-2xl border border-gray-100 py-20 text-center text-gray-400">
+                 <Activity className="w-12 h-12 mx-auto mb-4 opacity-10" />
+                 <p className="font-bold text-gray-500">No activity logged yet.</p>
+               </div>
+             ) : (
+               recentTransactions.map(tx => {
+                 const meta = txTypeIcon[tx.type] ?? txTypeIcon.transfer;
+                 return (
+                   <div key={tx.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
+                     <div className="flex items-start gap-3 mb-3">
+                       <div className={clsx("w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0", meta.color)}>
+                         {meta.icon}
+                       </div>
+                       <div className="flex-1 min-w-0">
+                         <h3 className="font-bold text-gray-900 text-sm">{tx.item_name}</h3>
+                         <p className="text-xs text-gray-500 mt-1">{format(new Date(tx.timestamp), 'MMM dd, HH:mm')}</p>
+                       </div>
+                     </div>
+
+                     <div className="grid grid-cols-2 gap-2 mb-3">
+                       <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                         <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Qty</p>
+                         <p className="text-sm font-black text-blue-900 mt-1 tabular-nums">{tx.quantity}u</p>
+                       </div>
+                       <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100">
+                         <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Cost</p>
+                         <p className="text-sm font-black text-emerald-900 mt-1">{formatDualCurrency(tx.unit_cost * tx.quantity, tx.currency)}</p>
+                       </div>
+                     </div>
+
+                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                       <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider">Route</p>
+                       <p className="text-xs font-bold text-gray-900 mt-1 flex items-center gap-1.5">
+                         <span className="truncate">{getLocationName(tx.from_location)}</span>
+                         <ChevronRight className="w-3 h-3 flex-shrink-0" />
+                         <span className="truncate">{getLocationName(tx.to_location)}</span>
+                       </p>
+                     </div>
+                   </div>
+                 );
+               })
+             )}
+           </div>
+         </div>
 
         {/* Right Panels */}
         <div className="space-y-6 lg:grid lg:grid-cols-2 lg:gap-6 xl:flex xl:flex-col xl:space-y-6">

@@ -194,3 +194,6 @@ export function convertCurrency(
   const amountINR = toINR(amount, fromCurrency);
   return fromINR(amountINR, toCurrency);
 }
+
+// Export the manager class for admin use
+export { ExchangeRateManager };
