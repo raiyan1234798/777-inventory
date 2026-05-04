@@ -38,6 +38,7 @@ export const DEFAULT_EXCHANGE_RATES: Record<string, number> = {
   QAR: 22.9,
   MYR: 17.6,
   THB: 2.3,
+  ZMW: 3.2,     // Zambian Kwacha — 1 ZMW ≈ 3.2 INR
 };
 
 class ExchangeRateManager {

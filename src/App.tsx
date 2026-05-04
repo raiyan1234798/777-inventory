@@ -11,6 +11,8 @@ import Notifications from './pages/Notifications';
 import ManageShops from './pages/ManageShops';
 import ManageWarehouses from './pages/ManageWarehouses';
 import Reports from './pages/Reports';
+import StockReports from './pages/StockReports';
+import Insights from './pages/Insights';
 
 function App() {
   return (
@@ -25,6 +27,8 @@ function App() {
           <Route path="returns" element={<Returns />} />
           <Route path="finance" element={<Finance />} />
           <Route path="reports" element={<Reports />} />
+          <Route path="stock-reports" element={<StockReports />} />
+          <Route path="insights" element={<Insights />} />
           <Route path="users" element={<Users />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="manage-shops" element={<ManageShops />} />

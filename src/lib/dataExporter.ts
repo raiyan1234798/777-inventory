@@ -5,14 +5,23 @@
  */
 
 import { format } from 'date-fns';
-import { exportToExcel, formatExportData } from './bulkOperations';
+import { exportToExcel } from './bulkOperations';
 
 export interface ExportConfig {
-  includeSheets: ('sales' | 'inventory' | 'returns' | 'expenses' | 'transfers')[];
+  includeSheets: ('sales' | 'inventory' | 'returns' | 'expenses' | 'transfers' | 'movement')[];
   dateFrom?: Date;
   dateTo?: Date;
   locationId?: string;
   includeAllLocations?: boolean;
+}
+
+export interface MovementDataParams {
+  inventory: any[];
+  items: any[];
+  locations: any[];
+  transactions: any[];
+  sales: any[];
+  returns: any[];
 }
 
 export class DataExporter {
@@ -36,29 +45,18 @@ export class DataExporter {
       filtered = filtered.filter(s => s.location_id === config.locationId);
     }
     
-    const columns = [
-      'item_name', 'quantity', 'selling_price', 'currency',
-      'converted_price_INR', 'avg_cost_INR', 'profit_INR',
-      'sold_by', 'timestamp'
-    ];
-    
-    const formatted = formatExportData(
-      filtered.map(s => ({
-        'Item Name': s.item_name,
-        'Quantity': s.quantity,
-        'Unit Price': s.selling_price,
-        'Currency': s.currency,
-        'Total Revenue (INR)': s.converted_price_INR,
-        'Cost (INR)': s.avg_cost_INR * s.quantity,
-        'Profit (INR)': s.profit_INR,
-        'Sold By': s.sold_by,
-        'Date': format(new Date(s.timestamp), 'MMM dd, yyyy HH:mm'),
-        'Location': locations.find(l => l.id === s.location_id)?.name || s.location_id
-      })),
-      columns
-    );
-    
-    return formatted;
+    return filtered.map(s => ({
+      'Item Name': s.item_name || 'Unknown',
+      'Quantity': s.quantity || 0,
+      'Unit Price': s.selling_price || 0,
+      'Currency': s.currency || 'INR',
+      'Total Revenue (INR)': s.converted_price_INR || 0,
+      'Cost (INR)': (s.avg_cost_INR || 0) * (s.quantity || 0),
+      'Profit (INR)': s.profit_INR || 0,
+      'Sold By': s.sold_by || 'Unknown',
+      'Date': s.timestamp ? format(new Date(s.timestamp), 'MMM dd, yyyy HH:mm') : '—',
+      'Location': locations.find(l => l.id === s.location_id)?.name || s.location_id || 'Unknown'
+    }));
   }
 
   /**
@@ -79,19 +77,18 @@ export class DataExporter {
     return filtered.map(inv => {
       const item = itemsData.find((i: any) => i.id === inv.item_id);
       const location = locations.find((l: any) => l.id === inv.location_id);
+      const itemName = item?.name || (inv.item_id ? `ITEM-${inv.item_id.slice(-6).toUpperCase()}` : 'Unknown Item');
       
       return {
-        'Item Name': item?.name || inv.item_id,
-        'SKU': item?.sku || '',
-        'Category': item?.category || '',
-        'Quantity': inv.quantity,
-        'Unit Cost (INR)': inv.avg_cost_INR,
-        'Total Value (INR)': inv.quantity * inv.avg_cost_INR,
+        'Item Name': itemName.toUpperCase(),
+        'SKU': item?.sku || '-',
+        'Category': item?.category || '-',
+        'Quantity': inv.quantity || 0,
+        'Unit Cost (INR)': inv.avg_cost_INR || 0,
+        'Total Value (INR)': (inv.quantity || 0) * (inv.avg_cost_INR || 0),
         'Retail Price': item?.retail_price || 0,
-        'Location': location?.name || '',
-        'Location Type': location?.type || '',
-        'Min Stock': item?.min_stock_limit || 0,
-        'Status': inv.quantity < (item?.min_stock_limit || 10) ? 'Low Stock' : 'OK'
+        'Location': location?.name || inv.location_id || 'Unknown',
+        'Status': (inv.quantity || 0) < (item?.min_stock_limit || 10) ? 'Low Stock' : 'OK'
       };
     });
   }
@@ -120,13 +117,13 @@ export class DataExporter {
       const location = locations.find(l => l.id === ret.location_id);
       
       return {
-        'Item Name': ret.item_name,
-        'Quantity': ret.quantity,
-        'Return Type': ret.type === 'sale_return' ? 'Sale Return' : 'Node Flowback',
+        'Item Name': ret.item_name || 'Unknown',
+        'Quantity': ret.quantity || 0,
+        'Return Type': ret.type === 'sale_return' ? 'Sale Return' : 'Shop Transfer',
         'Reason': ret.reason || 'No reason provided',
-        'Status': ret.status,
-        'Location': location?.name || '',
-        'Date': format(new Date(ret.timestamp), 'MMM dd, yyyy HH:mm')
+        'Status': ret.status || 'pending',
+        'Location': location?.name || ret.location_id || 'Unknown',
+        'Date': ret.timestamp ? format(new Date(ret.timestamp), 'MMM dd, yyyy HH:mm') : '—'
       };
     });
   }
@@ -155,13 +152,13 @@ export class DataExporter {
       const location = locations.find(l => l.id === exp.location_id);
       
       return {
-        'Category': exp.category,
-        'Description': exp.description,
-        'Amount (INR)': exp.amount_INR,
+        'Category': exp.category || 'General',
+        'Description': exp.description || '',
+        'Amount (INR)': exp.amount_INR || exp.amount || 0,
         'Currency': exp.currency || 'INR',
-        'Location': location?.name || '',
-        'Location Type': exp.location_type || '',
-        'Date': format(new Date(exp.date), 'MMM dd, yyyy'),
+        'Location': location?.name || exp.location_id || 'Unknown',
+        'Location Type': exp.location_type || location?.type || '',
+        'Date': exp.date ? format(new Date(exp.date), 'MMM dd, yyyy') : '—',
         'Notes': exp.notes || ''
       };
     });
@@ -189,14 +186,14 @@ export class DataExporter {
       const toLoc = locations.find((l: any) => l.id === transfer.to_location);
       
       return {
-        'Item Name': transfer.item_name,
-        'Quantity': transfer.quantity,
-        'Unit Cost (INR)': transfer.unit_cost,
-        'Total Value (INR)': transfer.converted_value_INR,
-        'From Location': fromLoc?.name || transfer.from_location,
-        'To Location': toLoc?.name || transfer.to_location,
-        'Performed By': transfer.performed_by,
-        'Date': format(new Date(transfer.timestamp), 'MMM dd, yyyy HH:mm')
+        'Item Name': transfer.item_name || 'Unknown',
+        'Quantity': transfer.quantity || 0,
+        'Unit Cost (INR)': transfer.unit_cost || 0,
+        'Total Value (INR)': transfer.converted_value_INR || 0,
+        'From Location': fromLoc?.name || transfer.from_location || 'Supplier',
+        'To Location': toLoc?.name || transfer.to_location || 'Warehouse',
+        'Performed By': transfer.performed_by || 'Admin',
+        'Date': transfer.timestamp ? format(new Date(transfer.timestamp), 'MMM dd, yyyy HH:mm') : '—'
       };
     });
   }
@@ -211,26 +208,89 @@ export class DataExporter {
     locations: any[]
   ): any[] {
     return locations.map(location => {
-      const locSales = sales.filter(s => s.location_id === location.id);
-      const locInv = inventory.filter(i => i.location_id === location.id);
-      const locReturns = returns.filter(r => r.location_id === location.id);
+      const locSales = (sales || []).filter(s => s.location_id === location.id);
+      const locInv = (inventory || []).filter(i => i.location_id === location.id);
+      const locReturns = (returns || []).filter(r => r.location_id === location.id);
       
-      const totalRevenue = locSales.reduce((sum, s) => sum + s.converted_price_INR, 0);
-      const totalProfit = locSales.reduce((sum, s) => sum + s.profit_INR, 0);
-      const totalStockValue = locInv.reduce((sum, i) => sum + i.quantity * i.avg_cost_INR, 0);
-      const totalItems = locInv.reduce((sum, i) => sum + i.quantity, 0);
+      const totalRevenue = locSales.reduce((sum, s) => sum + (s.converted_price_INR || 0), 0);
+      const totalProfit = locSales.reduce((sum, s) => sum + (s.profit_INR || 0), 0);
+      const totalStockValue = locInv.reduce((sum, i) => sum + (i.quantity || 0) * (i.avg_cost_INR || 0), 0);
+      const totalItems = locInv.reduce((sum, i) => sum + (i.quantity || 0), 0);
       
       return {
-        'Location': location.name,
-        'Type': location.type,
-        'Country': location.country,
+        'Location': location.name || 'Unknown',
+        'Type': location.type || 'N/A',
+        'Country': location.country || 'N/A',
         'Total Sales': locSales.length,
         'Total Revenue (INR)': totalRevenue,
         'Total Profit (INR)': totalProfit,
         'Stock Items': totalItems,
         'Stock Value (INR)': totalStockValue,
         'Returns': locReturns.length,
-        'Profit Margin %': totalRevenue > 0 ? ((totalProfit / totalRevenue) * 100).toFixed(2) : 0
+        'Profit Margin %': totalRevenue > 0 ? ((totalProfit / totalRevenue) * 100).toFixed(2) : '0.00'
+      };
+    });
+  }
+
+  /**
+   * Export movement data (Opening, Received, Supplied, Returned) - 777 Format
+   */
+  static exportInventoryMovementData(
+    params: MovementDataParams,
+    config: ExportConfig
+  ): any[] {
+    const { inventory, items, locations, transactions, sales, returns } = params;
+    const dateStr = config.dateTo ? format(config.dateTo, 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd');
+    const dateFromStr = config.dateFrom ? format(config.dateFrom, 'yyyy-MM-dd') : dateStr;
+
+    const isInRange = (timestamp: string) => {
+      const d = new Date(timestamp).toISOString().split('T')[0];
+      return d >= dateFromStr && d <= dateStr;
+    };
+
+    const locationId = config.locationId;
+    const filteredItems = config.locationId 
+      ? items // If specific location, show all items or items with inventory
+      : items;
+
+    let slNo = 1;
+    return filteredItems.sort((a,b) => a.name.localeCompare(b.name)).map(item => {
+      const locId = locationId!;
+      
+      const received = transactions
+        .filter(t => t.item_id === item.id && t.to_location === locId && isInRange(t.timestamp) && (t.type === 'stock_entry' || t.type === 'transfer'))
+        .reduce((s, t) => s + (t.quantity || 0), 0);
+
+      const soldQty = sales
+        .filter(s => s.item_id === item.id && s.location_id === locId && isInRange(s.timestamp))
+        .reduce((s, sale) => s + (sale.quantity || 0), 0);
+
+      const transferredOut = transactions
+        .filter(t => t.item_id === item.id && t.from_location === locId && t.type === 'transfer' && isInRange(t.timestamp))
+        .reduce((s, t) => s + (t.quantity || 0), 0);
+
+      const supplied = soldQty + transferredOut;
+
+      const returned = returns
+        .filter(r => r.item_id === item.id && r.location_id === locId && isInRange(r.timestamp) && r.status === 'Restocked')
+        .reduce((s, r) => s + (r.quantity || 0), 0);
+
+      const currentQty = inventory
+        .filter(e => e.item_id === item.id && e.location_id === locId)
+        .reduce((s, e) => s + (e.quantity || 0), 0);
+
+      // Opening = Stock before this period's ops
+      const opening = currentQty - received + supplied - returned;
+
+      return {
+        'SL NO.': slNo++,
+        'ITEM DESCRIPTION': (item.name || `ITEM ${item.id}`).toUpperCase(),
+        'CODE #': item.sku || '-',
+        'OPENING': opening || 0,
+        'RECEIVED': received || 0,
+        'SUPPLIED': supplied || 0,
+        'RETURNED': returned || 0,
+        'CLOSING BALANCE': currentQty || 0
       };
     });
   }
@@ -247,54 +307,73 @@ export class DataExporter {
       transfers: any[];
       items: any[];
       locations: any[];
+      transactions: any[];
     },
     config: ExportConfig
   ): Promise<void> {
     const sheets: Record<string, any[]> = {};
-    
+
     if (config.includeSheets.includes('sales')) {
-      sheets['Sales'] = this.exportSalesData(data.sales, data.locations, config);
+      const rows = this.exportSalesData(data.sales, data.locations, config);
+      if (rows.length > 0) sheets['Sales'] = rows;
     }
-    
-    if (config.includeSheets.includes('inventory')) {
-      sheets['Inventory'] = this.exportInventoryData(
-        data.inventory,
-        data.items,
-        data.locations,
-        config
-      );
+
+    if (config.includeSheets.includes('inventory') || config.includeSheets.includes('movement')) {
+      // Only generate movement sheets when locations exist
+      if (data.locations.length > 0) {
+        // Warehouse movement sheets (777 Format)
+        data.locations.filter(l => l.type === 'warehouse').forEach(w => {
+          const rows = this.exportInventoryMovementData(
+            data,
+            { ...config, locationId: w.id, includeAllLocations: false }
+          );
+          if (rows.length > 0) sheets[`STOCK-${w.name.toUpperCase()}`] = rows;
+        });
+
+        // Shop movement sheets (777 Format)
+        data.locations.filter(l => l.type === 'shop').forEach(shop => {
+          const rows = this.exportInventoryMovementData(
+            data,
+            { ...config, locationId: shop.id, includeAllLocations: false }
+          );
+          if (rows.length > 0) sheets[`STOCK-${shop.name.toUpperCase()}`] = rows;
+        });
+      }
     }
-    
+
     if (config.includeSheets.includes('returns')) {
-      sheets['Returns'] = this.exportReturnsData(
-        data.returns,
-        data.locations,
-        config
-      );
+      const rows = this.exportReturnsData(data.returns, data.locations, config);
+      if (rows.length > 0) sheets['Returns'] = rows;
     }
-    
+
     if (config.includeSheets.includes('expenses')) {
-      sheets['Expenses'] = this.exportExpensesData(data.expenses, data.locations, config);
+      const rows = this.exportExpensesData(data.expenses, data.locations, config);
+      if (rows.length > 0) sheets['Expenses'] = rows;
     }
-    
+
     if (config.includeSheets.includes('transfers')) {
-      sheets['Transfers'] = this.exportTransfersData(
-        data.transfers,
-        data.locations,
-        config
-      );
+      const rows = this.exportTransfersData(data.transfers, data.locations, config);
+      if (rows.length > 0) sheets['Transfers'] = rows;
     }
-    
-    // Always add summary
-    sheets['Summary'] = this.exportSummaryData(
+
+    // Summary sheet — always include
+    const summary = this.exportSummaryData(
       data.sales,
       data.inventory,
       data.returns,
       data.locations
     );
-    
+    sheets['Summary'] = summary.length > 0
+      ? summary
+      : [{ 'Status': 'No data yet', 'Note': 'Add locations, stock and sales to see data here.' }];
+
+    // Guarantee at least one sheet to avoid XLSX "Workbook is empty" error
+    if (Object.keys(sheets).length === 0) {
+      sheets['Summary'] = [{ 'Status': 'No data yet', 'Note': 'Add locations, stock and sales to see data here.' }];
+    }
+
     await exportToExcel(sheets, {
-      filename: 'inventory_complete_export',
+      filename: `inventory_complete_export_${new Date().toISOString().split('T')[0]}`,
       includeTimestamp: true
     });
   }

@@ -33,7 +33,8 @@ export interface Item {
   category: string;
   sku: string;
   min_stock_limit: number;
-  retail_price?: number; // Added to store default selling price
+  retail_price?: number; 
+  avg_cost_INR?: number; 
 }
 
 export interface InventoryEntry {
@@ -41,6 +42,11 @@ export interface InventoryEntry {
   location_id: string;
   item_id: string;
   quantity: number;
+  opening_balance: number;
+  received_balance: number;
+  supplied_balance: number;
+  returned_balance: number;
+  last_rollover_date?: string; // YYYY-MM-DD
   avg_cost_INR: number;
 }
 
@@ -146,8 +152,27 @@ export const EXCHANGE_RATES: Record<string, number> = { ...DEFAULT_EXCHANGE_RATE
 
 export const CURRENCIES = Object.keys(EXCHANGE_RATES).sort();
 
+/**
+ * Recursively remove all `undefined` values from an object before writing to Firestore.
+ * Firestore rejects any field set to `undefined` — this prevents those errors globally.
+ */
+export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
+  const result: any = {};
+  for (const key of Object.keys(obj)) {
+    const val = obj[key];
+    if (val === undefined) continue; // drop undefined fields
+    if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
+      result[key] = sanitizeForFirestore(val);
+    } else {
+      result[key] = val;
+    }
+  }
+  return result as T;
+}
+
 export const COUNTRIES = [
   { name: 'India', currency: 'INR' },
+  { name: 'Zambia', currency: 'ZMW' },
   { name: 'China', currency: 'CNY' },
   { name: 'Pakistan', currency: 'PKR' },
   { name: 'Saudi Arabia', currency: 'SAR' },
@@ -163,11 +188,13 @@ export function toINR(amount: number, currency: string): number {
   return amount * (EXCHANGE_RATES[currency] ?? 1);
 }
 
-export function formatCurrency(amount: number, currency: string = 'INR'): string {
+export function formatCurrency(amount: number | null | undefined, currency: string = 'INR'): string {
+  if (amount === null || amount === undefined) return '—';
   const symbols: Record<string, string> = {
     INR: '₹', USD: '$', EUR: '€', GBP: '£', PKR: '₨', CNY: '¥',
     SAR: '﷼', AED: 'د.إ', JPY: '¥', CAD: 'C$', AUD: 'A$', SGD: 'S$',
-    KWD: 'د.ك', OMR: 'ر.ع.', BHD: '.د.ب', QAR: 'ر.ق', MYR: 'RM', THB: '฿'
+    KWD: 'د.ك', OMR: 'ر.ع.', BHD: '.د.ب', QAR: 'ر.ق', MYR: 'RM', THB: '฿',
+    ZMW: 'K',
   };
   return `${symbols[currency] ?? currency + ' '}${amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
@@ -222,6 +249,7 @@ interface AppState {
   expenses: ShopExpense[];
   targets: ShopTarget[];
   isSyncing: boolean;
+  exchangeRates: Record<string, number>;
 
   // Setters (called by Firestore listeners)
   setLocations: (d: Location[]) => void;
@@ -234,15 +262,19 @@ interface AppState {
   setReturns: (d: ReturnRecord[]) => void;
   setNotifications: (d: AppNotification[]) => void;
   setUsers: (d: User[]) => void;
+  setExchangeRates: (d: Record<string, number>) => void;
   setIsSyncing: (v: boolean) => void;
 
   // Actions
+  deleteStockEntry: (id: string) => Promise<void>;
+  deleteStockEntries: (ids: string[]) => Promise<void>;
   addLocation: (loc: Omit<Location, 'id'>) => Promise<void>;
   updateLocation: (id: string, loc: Partial<Location>) => Promise<void>;
   deleteLocation: (id: string) => Promise<void>;
   addBrand: (brand: Omit<Brand, 'id'>) => Promise<string>;
   deleteBrand: (id: string) => Promise<void>;
   addItem: (item: Omit<Item, 'id'>) => Promise<void>;
+  updateItem: (id: string, updates: Partial<Item>) => Promise<void>;
   deleteItem: (id: string) => Promise<void>;
 
   addContainer: (container: Omit<Container, 'id'>) => Promise<string>;
@@ -258,6 +290,18 @@ interface AppState {
     currency: string;
     performed_by: string;
   }) => Promise<void>;
+
+  // Batch stock entry for faster processing
+  batchStockEntry: (items: {
+    container_id: string;
+    location_id: string;
+    item_id: string;
+    item_name: string;
+    quantity: number;
+    unit_cost: number;
+    currency: string;
+    is_absolute_override?: boolean;
+  }[], performed_by: string) => Promise<void>;
 
   // Transfer between locations
   transfer: (params: {
@@ -298,9 +342,14 @@ interface AppState {
   setExpenses: (d: ShopExpense[]) => void;
   setTargets: (d: ShopTarget[]) => void;
 
+  // Rollover management
+  performRolloverIfNecessary: () => Promise<void>;
+
   // Helpers
   getInventoryAt: (location_id: string, item_id: string) => InventoryEntry | undefined;
   markNotificationRead: (id: string) => Promise<void>;
+  deleteNotification: (id: string) => Promise<void>;
+  deleteNotifications: (ids: string[]) => Promise<void>;
   initFirestoreSync: () => void;
 }
 
@@ -318,6 +367,7 @@ export const useStore = create<AppState>((set, get) => ({
   expenses: [],
   targets: [],
   isSyncing: false,
+  exchangeRates: { ...DEFAULT_EXCHANGE_RATES },
 
   setLocations: (d) => set({ locations: d }),
   setBrands: (d) => set({ brands: d }),
@@ -331,19 +381,105 @@ export const useStore = create<AppState>((set, get) => ({
   setUsers: (d) => set({ users: d }),
   setExpenses: (d) => set({ expenses: d }),
   setTargets: (d) => set({ targets: d }),
+  setExchangeRates: (d) => {
+    // Merge remote rates with defaults to ensure keys like 'INR' (1) are always present
+    const merged = { ...DEFAULT_EXCHANGE_RATES, ...d };
+    set({ exchangeRates: merged });
+    
+    // Update the exported constant (optional, but good for legacy components)
+    Object.assign(EXCHANGE_RATES, merged);
+  },
   setIsSyncing: (v) => set({ isSyncing: v }),
 
   getInventoryAt: (location_id, item_id) => {
     return get().inventory.find(e => e.location_id === location_id && e.item_id === item_id);
   },
 
-  // ── Locations ──────────────────────────────────────────────────────────────
+  performRolloverIfNecessary: async () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const { inventory } = get();
+    const staleItems = inventory.filter(inv => inv.last_rollover_date && inv.last_rollover_date !== todayStr);
+    
+    if (staleItems.length === 0) return;
+
+    console.log(`[Store] Day changed! Rolling over ${staleItems.length} inventory items to new opening balances...`);
+    
+    // Process in batches
+    for (let i = 0; i < staleItems.length; i += 500) {
+      const batch = writeBatch(db);
+      const chunk = staleItems.slice(i, i + 500);
+      chunk.forEach(inv => {
+        batch.update(doc(db, 'inventory', inv.id), {
+          opening_balance: inv.quantity, // Closing becomes Opening
+          received_balance: 0,
+          supplied_balance: 0,
+          returned_balance: 0,
+          last_rollover_date: todayStr
+        });
+      });
+      await batch.commit();
+    }
+  },
+
+  deleteStockEntry: async (id) => {
+    return get().deleteStockEntries([id]);
+  },
+  deleteStockEntries: async (ids) => {
+    try {
+      console.log("[Store] Bulk deleting stock and all associated history for:", ids.length, "items");
+      // id format is locationId_itemId. Extract target pairs for matching history:
+      const targetMap = new Map<string, Set<string>>(); // itemId -> Set of locationIds
+      ids.forEach(id => {
+        const [loc, item] = id.split('_');
+        if (!targetMap.has(item)) targetMap.set(item, new Set());
+        targetMap.get(item)!.add(loc);
+      });
+
+      const st = get();
+      const txToDelete = st.transactions.filter(tx => 
+        targetMap.has(tx.item_id) && (targetMap.get(tx.item_id)!.has(tx.from_location) || targetMap.get(tx.item_id)!.has(tx.to_location))
+      ).map(t => doc(db, 'transactions', t.id));
+
+      const salesToDelete = st.sales.filter(s => 
+        targetMap.has(s.item_id) && targetMap.get(s.item_id)!.has(s.location_id)
+      ).map(s => doc(db, 'sales', s.id));
+
+      const retToDelete = st.returns.filter(r => 
+        targetMap.has(r.item_id) && targetMap.get(r.item_id)!.has(r.location_id)
+      ).map(r => doc(db, 'returns', r.id));
+
+      const invToDelete = ids.map(id => doc(db, 'inventory', id));
+
+      const allDocs = [...invToDelete, ...txToDelete, ...salesToDelete, ...retToDelete];
+      console.log(`[Store] Total associated documents to permanently delete: ${allDocs.length}`);
+
+      for (let i = 0; i < allDocs.length; i += 500) {
+        const batch = writeBatch(db);
+        const chunk = allDocs.slice(i, i + 500);
+        chunk.forEach(dRef => batch.delete(dRef));
+        await batch.commit();
+      }
+    } catch (err: any) {
+      console.error("[Store] Deletion Error:", err);
+      throw err;
+    }
+  },
   addLocation: async (loc) => {
+    if (!loc.name?.trim()) throw new Error('Location name is required.');
+    if (!['warehouse', 'shop'].includes(loc.type)) throw new Error('Invalid location type.');
+    
+    // Check for duplicate names
+    const exists = get().locations.some(l => l.name.toLowerCase() === loc.name.toLowerCase());
+    if (exists) throw new Error(`A location named "${loc.name}" already exists.`);
+
     const ref = doc(collection(db, 'locations'));
-    await setDoc(ref, { id: ref.id, ...loc });
+    await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...loc }));
   },
   updateLocation: async (id, loc) => {
-    await updateDoc(doc(db, 'locations', id), loc);
+    if (loc.name && !loc.name.trim()) throw new Error('Location name cannot be empty.');
+    if (loc.type && !['warehouse', 'shop'].includes(loc.type)) throw new Error('Invalid location type.');
+
+    await updateDoc(doc(db, 'locations', id), sanitizeForFirestore(loc as Record<string, any>));
   },
   deleteLocation: async (id) => {
     // Safety check: ensure no inventory remains
@@ -354,115 +490,172 @@ export const useStore = create<AppState>((set, get) => ({
 
   // ── Brands ─────────────────────────────────────────────────────────────────
   addBrand: async (brand) => {
+    if (!brand.name?.trim()) throw new Error('Brand name is required.');
+    
+    const exists = get().brands.some(b => b.name.toLowerCase() === brand.name.toLowerCase());
+    if (exists) throw new Error(`Brand "${brand.name}" already exists.`);
+
     const ref = doc(collection(db, 'brands'));
-    await setDoc(ref, { id: ref.id, ...brand });
+    await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...brand }));
     return ref.id;
   },
   deleteBrand: async (id) => {
+    // Check if items use this brand
+    const hasItems = get().items.some(i => i.brand_id === id);
+    if (hasItems) throw new Error('Cannot delete brand: items are still assigned to it.');
     await deleteDoc(doc(db, 'brands', id));
   },
 
   // ── Items ──────────────────────────────────────────────────────────────────
   addItem: async (item) => {
+    if (!item.name?.trim()) throw new Error('Item name is required.');
+    if (!item.sku?.trim()) throw new Error('SKU is required.');
+    
+    const exists = get().items.some(i => i.sku.toLowerCase() === item.sku.toLowerCase());
+    if (exists) throw new Error(`An item with SKU "${item.sku}" already exists.`);
+
     const ref = doc(collection(db, 'items'));
-    await setDoc(ref, { id: ref.id, ...item });
+    await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...item }));
+  },
+  updateItem: async (id, updates) => {
+    if (updates.sku) {
+      const exists = get().items.some(i => i.id !== id && i.sku.toLowerCase() === updates.sku!.toLowerCase());
+      if (exists) throw new Error(`An item with SKU "${updates.sku}" already exists.`);
+    }
+    await updateDoc(doc(db, 'items', id), sanitizeForFirestore(updates as Record<string, any>));
   },
   deleteItem: async (id) => {
+    // Check for inventory
+    const hasInv = get().inventory.some(e => e.item_id === id && e.quantity > 0);
+    if (hasInv) throw new Error('Cannot delete item: active inventory exists.');
     await deleteDoc(doc(db, 'items', id));
   },
 
   // ── Container ──────────────────────────────────────────────────────────────
   addContainer: async (container) => {
     const ref = doc(collection(db, 'containers'));
-    await setDoc(ref, { id: ref.id, ...container });
+    await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...container }));
     return ref.id; // Return ID for chaining
   },
 
   // ── Stock Entry ────────────────────────────────────────────────────────────
-  stockEntry: async ({ container_id, location_id, item_id, item_name, quantity, unit_cost, currency, performed_by }) => {
-    // FIX: Use transaction lock to prevent race conditions on inventory
-    const lockResource = `inventory_${location_id}_${item_id}`;
+  stockEntry: async (params) => {
+    return get().batchStockEntry([params], params.performed_by);
+  },
+  batchStockEntry: async (items_to_process, performed_by, { skipNotifications = false } = {}) => {
+    // Prebuild global inventory map for O(1) lookups
+    const inventorySnapshot = new Map(get().inventory.map(e => [`${e.location_id.replace(/\//g, '-')}_${e.item_id.replace(/\//g, '-')}`, e]));
+    const locationsMap = new Map(get().locations.map(l => [l.id, l]));
+    const itemsMap = new Map(get().items.map(i => [i.id, i]));
+
+    // Estimate ops per item: 1 inventory + 1 tx + (0 or 1 notif) = 2-3
+    // Firestore limit = 500 ops per batch; use 150 items/batch for safety with notifications, 240 without
+    const CHUNK_SIZE = skipNotifications ? 240 : 150;
+
+    // Build ALL batches first, then commit them in parallel groups of 3
+    const batches: ReturnType<typeof writeBatch>[] = [];
     
-    return transactionLockManager.executeWithLock(lockResource, async () => {
+    for (let i = 0; i < items_to_process.length; i += CHUNK_SIZE) {
+      const chunk = items_to_process.slice(i, i + CHUNK_SIZE);
       const batch = writeBatch(db);
-      const converted = toINR(unit_cost * quantity, currency);
-      const avgCostINR = toINR(unit_cost, currency);
+      const pendingInventory = new Map<string, { quantity: number; avg_cost_INR: number }>();
 
-      // Update inventory entry
-      const invId = `${location_id}_${item_id}`;
-      const existing = get().getInventoryAt(location_id, item_id);
-      const newQty = (existing?.quantity ?? 0) + quantity;
-      const newAvg = existing
-        ? (existing.avg_cost_INR * existing.quantity + avgCostINR * quantity) / newQty
-        : avgCostINR;
+      for (const params of chunk) {
+        const { container_id, location_id, item_id, item_name, quantity, unit_cost, currency, is_absolute_override } = params;
+        const avgCostINR = toINR(unit_cost, currency);
 
-      batch.set(doc(db, 'inventory', invId), {
-        id: invId, location_id, item_id, quantity: newQty, avg_cost_INR: newAvg
-      });
+        const safeLocId = location_id.replace(/\//g, '-');
+        const safeItemId = item_id.replace(/\//g, '-');
+        const invId = `${safeLocId}_${safeItemId}`;
 
-      // Log transaction
-      const txRef = doc(collection(db, 'transactions'));
-      batch.set(txRef, {
-        id: txRef.id,
-        type: 'stock_entry',
-        from_location: 'supplier',
-        to_location: location_id,
-        item_id, item_name, quantity, unit_cost, currency,
-        converted_value_INR: converted,
-        performed_by,
-        container_id,
-        timestamp: new Date().toISOString(),
-      });
+        let currentInv = pendingInventory.get(invId);
+        if (!currentInv) {
+          const existing = inventorySnapshot.get(invId);
+          currentInv = existing
+            ? { quantity: existing.quantity, avg_cost_INR: existing.avg_cost_INR }
+            : { quantity: 0, avg_cost_INR: 0 };
+        }
 
-      // Helper to create a notification in batch
-      const createNotif = (
-        type: AppNotification['type'],
-        location_id: string,
-        message: string,
-        target_roles: AppNotification['target_roles'],
-        extra?: Partial<AppNotification>
-      ) => {
-        const notifRef = doc(collection(db, 'notifications'));
-        batch.set(notifRef, {
-          id: notifRef.id, type, location_id, message,
-          target_roles, status: 'unread',
-          timestamp: new Date().toISOString(),
-          ...extra,
-        });
-      };
+        const deltaQty = is_absolute_override
+          ? Math.max(0, quantity - currentInv.quantity)
+          : quantity;
+        const newQty = is_absolute_override ? quantity : currentInv.quantity + deltaQty;
 
-      // Determine location type and target roles based on location
-      const location = get().locations.find(l => l.id === location_id);
-      const locationType = location?.type ?? 'warehouse';
-      const targetRoles = getTargetRolesForLocationStockEntry(locationType);
+        let newAvg = currentInv.avg_cost_INR;
+        if (!is_absolute_override) {
+          newAvg = currentInv.quantity > 0 || deltaQty > 0
+            ? (currentInv.avg_cost_INR * currentInv.quantity + avgCostINR * deltaQty) / newQty
+            : avgCostINR;
+        } else if (avgCostINR > 0) {
+          newAvg = avgCostINR;
+        }
 
-      // Stock-entry notification — location-specific staff + admin + super_admin
-      const locationName = location?.name ?? 'Location';
-      const operationMsg = locationType === 'warehouse'
-        ? `📦 Stock Received: ${item_name} — ${quantity} units added to warehouse.`
-        : `📦 Stock Transfer: ${item_name} — ${quantity} units added to shop.`;
+        const safeQty = Math.round(newQty);
+        pendingInventory.set(invId, { quantity: safeQty, avg_cost_INR: newAvg });
 
-      createNotif(
-        'stock_entry', location_id,
-        operationMsg,
-        targetRoles,
-        { item_id }
-      );
+        const currentDay = new Date().toISOString().split('T')[0];
 
-      // Low stock check after stock entry
-      const item = get().items.find(i => i.id === item_id);
-      if (item && newQty < item.min_stock_limit) {
-        createNotif(
-          'low_stock', location_id,
-          `⚠️ Low Stock Alert: ${item_name} at ${locationName} is below minimum (${newQty}/${item.min_stock_limit} units). Immediate action required.`,
-          targetRoles,
-          { item_id }
-        );
+        batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({
+          id: invId, location_id, item_id, quantity: safeQty, avg_cost_INR: newAvg,
+          opening_balance: currentInv.quantity, // Closing becomes Opening
+          received_balance: deltaQty,
+          supplied_balance: 0,
+          returned_balance: 0,
+          last_rollover_date: currentDay
+        }));
+
+        if (deltaQty !== 0) {
+          const txRef = doc(collection(db, 'transactions'));
+          batch.set(txRef, sanitizeForFirestore({
+            id: txRef.id, type: 'stock_entry',
+            from_location: 'supplier', to_location: location_id,
+            item_id, item_name, quantity: deltaQty, unit_cost, currency,
+            converted_value_INR: toINR(unit_cost * Math.abs(deltaQty), currency),
+            performed_by, container_id: container_id || null,
+            notes: is_absolute_override ? 'Stock level override (Import)' : null,
+            timestamp: new Date().toISOString(),
+          }));
+        }
+
+        // Skip individual notifications during bulk imports — dramatically reduces batch count
+        if (!skipNotifications) {
+          const location = locationsMap.get(location_id);
+          const locationType = location?.type ?? 'warehouse';
+          const targetRoles = getTargetRolesForLocationStockEntry(locationType);
+
+          const notifRef = doc(collection(db, 'notifications'));
+          batch.set(notifRef, sanitizeForFirestore({
+            id: notifRef.id, type: 'stock_entry', location_id,
+            message: locationType === 'warehouse'
+              ? `📦 Stock Received: ${item_name} — ${deltaQty} units added to ${location?.name ?? 'warehouse'}.`
+              : `📦 Stock Transfer: ${item_name} — ${deltaQty} units added to ${location?.name ?? 'shop'}.`,
+            target_roles: targetRoles, status: 'unread',
+            timestamp: new Date().toISOString(), item_id
+          }));
+
+          const item = itemsMap.get(item_id);
+          if (item && newQty < item.min_stock_limit) {
+            const lowNotifRef = doc(collection(db, 'notifications'));
+            batch.set(lowNotifRef, {
+              id: lowNotifRef.id, type: 'low_stock', location_id,
+              message: `⚠️ Low Stock Alert: ${item_name} is below minimum (${newQty}/${item.min_stock_limit} units).`,
+              target_roles: targetRoles, status: 'unread',
+              timestamp: new Date().toISOString(), item_id
+            });
+          }
+        }
       }
 
-      await batch.commit();
-    }, performed_by);
+      batches.push(batch);
+    }
+
+    // Commit in parallel groups of 4 for maximum throughput
+    const PARALLEL = 4;
+    for (let i = 0; i < batches.length; i += PARALLEL) {
+      await Promise.all(batches.slice(i, i + PARALLEL).map(b => b.commit()));
+    }
   },
+
 
   // ── Transfer ───────────────────────────────────────────────────────────────
   transfer: async ({ from_location, to_location, item_id, item_name, quantity, unit_cost_INR, performed_by }) => {
@@ -481,14 +674,39 @@ export const useStore = create<AppState>((set, get) => ({
         const toId = `${to_location}_${item_id}`;
         const toEntry = get().getInventoryAt(to_location, item_id);
 
-        const newFromQty = fromEntry.quantity - quantity;
-        const toQty = (toEntry?.quantity ?? 0) + quantity;
+        const newFromQty = Math.round(fromEntry.quantity - quantity);
+        const toQty = Math.round((toEntry?.quantity ?? 0) + quantity);
         const toAvg = toEntry
           ? (toEntry.avg_cost_INR * toEntry.quantity + unit_cost_INR * quantity) / toQty
           : unit_cost_INR;
 
-        batch.set(doc(db, 'inventory', fromId), { ...fromEntry, quantity: newFromQty });
-        batch.set(doc(db, 'inventory', toId), { id: toId, location_id: to_location, item_id, quantity: toQty, avg_cost_INR: toAvg });
+        const currentDay = new Date().toISOString().split('T')[0];
+
+        // Update Source
+        const updatedFrom = {
+          ...fromEntry,
+          quantity: newFromQty,
+          supplied_balance: (fromEntry.supplied_balance || 0) + quantity,
+          last_rollover_date: fromEntry.last_rollover_date || currentDay
+        };
+        batch.set(doc(db, 'inventory', fromId), sanitizeForFirestore(updatedFrom));
+
+        // Update Destination
+        const updatedTo = toEntry 
+          ? {
+              ...toEntry,
+              quantity: toQty,
+              received_balance: (toEntry.received_balance || 0) + quantity,
+              avg_cost_INR: toAvg
+            }
+          : {
+              id: toId, location_id: to_location, item_id,
+              quantity: toQty, avg_cost_INR: toAvg,
+              opening_balance: 0, received_balance: quantity,
+              supplied_balance: 0, returned_balance: 0,
+              last_rollover_date: currentDay
+            };
+        batch.set(doc(db, 'inventory', toId), sanitizeForFirestore(updatedTo));
 
         const txRef = doc(collection(db, 'transactions'));
         batch.set(txRef, {
@@ -570,9 +788,16 @@ export const useStore = create<AppState>((set, get) => ({
       const invEntry = get().getInventoryAt(location_id, item_id);
       if (!invEntry || invEntry.quantity < quantity) throw new Error('Insufficient stock for sale.');
 
+      const currentDay = new Date().toISOString().split('T')[0];
       const invId = `${location_id}_${item_id}`;
-      const newQty = invEntry.quantity - quantity;
-      batch.set(doc(db, 'inventory', invId), { ...invEntry, quantity: newQty });
+      const newQty = Math.round(invEntry.quantity - quantity);
+      
+      batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({ 
+        ...invEntry, 
+        quantity: newQty,
+        supplied_balance: (invEntry.supplied_balance || 0) + quantity,
+        last_rollover_date: invEntry.last_rollover_date || currentDay
+      }));
 
       const convertedPriceINR = toINR(selling_price * quantity, currency);
       const profitINR = convertedPriceINR - invEntry.avg_cost_INR * quantity;
@@ -637,42 +862,54 @@ export const useStore = create<AppState>((set, get) => ({
     }, sold_by);
   },
 
-  // ── Return ─────────────────────────────────────────────────────────────────
   processReturn: async (ret) => {
-    const batch = writeBatch(db);
-    const retRef = doc(collection(db, 'returns'));
-    batch.set(retRef, { id: retRef.id, ...ret });
+    const lockResource = `inventory_${ret.location_id}_${ret.item_id}`;
+    
+    return transactionLockManager.executeWithLock(lockResource, async () => {
+      const batch = writeBatch(db);
+      const retRef = doc(collection(db, 'returns'));
+      batch.set(retRef, sanitizeForFirestore({ id: retRef.id, ...ret }));
 
-    if (ret.status === 'Restocked') {
-      const invId = `${ret.location_id}_${ret.item_id}`;
-      const existing = get().getInventoryAt(ret.location_id, ret.item_id);
-      const newQty = (existing?.quantity ?? 0) + ret.quantity;
-      
-      // FIX: When restocking, maintain the original avg_cost (don't change it)
-      // This assumes the returned items have the same cost as the original batch
-      if (existing) {
-        batch.set(doc(db, 'inventory', invId), { ...existing, quantity: newQty });
-      } else {
-        // If it was somehow deleted or new location, create with cost 0 (requires manual adjustment later)
-        batch.set(doc(db, 'inventory', invId), { id: invId, location_id: ret.location_id, item_id: ret.item_id, quantity: newQty, avg_cost_INR: 0 });
+      if (ret.status === 'Restocked') {
+        const currentDay = new Date().toISOString().split('T')[0];
+        const invId = `${ret.location_id}_${ret.item_id}`;
+        const existing = get().getInventoryAt(ret.location_id, ret.item_id);
+        const newQty = Math.round((existing?.quantity ?? 0) + ret.quantity);
+        
+        if (existing) {
+          batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({ 
+            ...existing, 
+            quantity: newQty,
+            returned_balance: (existing.returned_balance || 0) + ret.quantity,
+            last_rollover_date: existing.last_rollover_date || currentDay
+          }));
+        } else {
+          batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({ 
+            id: invId, location_id: ret.location_id, item_id: ret.item_id, 
+            quantity: newQty, avg_cost_INR: 0,
+            opening_balance: 0, received_balance: 0, supplied_balance: 0,
+            returned_balance: ret.quantity, last_rollover_date: currentDay
+          }));
+        }
       }
-    }
 
-    // FIX: Record the cost impact of the return properly
-    const refSale = get().sales.find(s => s.id === ret.ref_transaction_id);
-    const returnCostINR = refSale ? refSale.avg_cost_INR * ret.quantity : 0;
+      // FIX: Record the cost impact of the return properly
+      const refSale = get().sales.find(s => s.id === ret.ref_transaction_id);
+      const returnCostINR = refSale ? refSale.avg_cost_INR * ret.quantity : 0;
 
-    const txRef = doc(collection(db, 'transactions'));
-    batch.set(txRef, {
-      id: txRef.id, type: 'return',
-      from_location: 'customer', to_location: ret.location_id,
-      item_id: ret.item_id, item_name: ret.item_name, quantity: ret.quantity,
-      unit_cost: returnCostINR, currency: 'INR', converted_value_INR: returnCostINR * ret.quantity,
-      performed_by: 'system',
-      timestamp: new Date().toISOString(),
-    });
+      const txRef = doc(collection(db, 'transactions'));
+      batch.set(txRef, {
+        id: txRef.id, type: 'return',
+        from_location: ret.type === 'warehouse_return' ? 'shop' : 'customer',
+        to_location: ret.location_id,
+        item_id: ret.item_id, item_name: ret.item_name, quantity: ret.quantity,
+        unit_cost: returnCostINR, currency: 'INR', converted_value_INR: returnCostINR * ret.quantity,
+        performed_by: 'system',
+        timestamp: new Date().toISOString(),
+      });
 
-    await batch.commit();
+      await batch.commit();
+    }, 'system');
   },
 
   // ── Users ──────────────────────────────────────────────────────────────────
@@ -705,66 +942,94 @@ export const useStore = create<AppState>((set, get) => ({
     await setDoc(doc(db, 'notifications', id), { status: 'read' }, { merge: true });
   },
 
+  deleteNotification: async (id) => {
+    await deleteDoc(doc(db, 'notifications', id));
+  },
+
+  deleteNotifications: async (ids) => {
+    const batch = writeBatch(db);
+    ids.forEach(id => batch.delete(doc(db, 'notifications', id)));
+    await batch.commit();
+  },
+
   initFirestoreSync: () => {
     set({ isSyncing: true });
     
     let loadedCollections = 0;
-    const totalCollections = 12;
+    const totalCollections = 13;
     
     const checkSyncComplete = () => {
       loadedCollections++;
       if (loadedCollections === totalCollections) {
-        set({ isSyncing: false }); // FIX: Only set to false once all listeners are ready
+        set({ isSyncing: false });
       }
     };
+
+    const logError = (name: string, err: any) => {
+      console.error(`[Firestore Sync] Error in ${name} listener:`, err);
+      // Even if one fails, we increment to avoid getting stuck in isSyncing=true
+      checkSyncComplete();
+    };
     
-    onSnapshot(collection(db, 'locations'), snap => {
-      set({ locations: snap.docs.map(d => ({ id: d.id, ...d.data() } as Location)) });
-      checkSyncComplete();
+    onSnapshot(collection(db, 'locations'), {
+      next: snap => { set({ locations: snap.docs.map(d => ({ id: d.id, ...d.data() } as Location)) }); checkSyncComplete(); },
+      error: err => logError('locations', err)
     });
-    onSnapshot(collection(db, 'brands'), snap => {
-      set({ brands: snap.docs.map(d => ({ id: d.id, ...d.data() } as Brand)) });
-      checkSyncComplete();
+    onSnapshot(collection(db, 'brands'), {
+      next: snap => { set({ brands: snap.docs.map(d => ({ id: d.id, ...d.data() } as Brand)) }); checkSyncComplete(); },
+      error: err => logError('brands', err)
     });
-    onSnapshot(collection(db, 'items'), snap => {
-      set({ items: snap.docs.map(d => ({ id: d.id, ...d.data() } as Item)) });
-      checkSyncComplete();
+    onSnapshot(collection(db, 'items'), {
+      next: snap => { set({ items: snap.docs.map(d => ({ id: d.id, ...d.data() } as Item)) }); checkSyncComplete(); },
+      error: err => logError('items', err)
     });
-    onSnapshot(collection(db, 'inventory'), snap => {
-      set({ inventory: snap.docs.map(d => ({ id: d.id, ...d.data() } as InventoryEntry)) });
-      checkSyncComplete();
+    onSnapshot(query(collection(db, 'inventory')), {
+      next: (snap) => { get().setInventory(snap.docs.map(d => d.data() as InventoryEntry)); get().performRolloverIfNecessary(); checkSyncComplete(); },
+      error: err => logError('inventory', err)
     });
-    onSnapshot(query(collection(db, 'containers'), orderBy('date', 'desc')), snap => {
-      set({ containers: snap.docs.map(d => ({ id: d.id, ...d.data() } as Container)) });
-      checkSyncComplete();
+    onSnapshot(query(collection(db, 'containers'), orderBy('date', 'desc')), {
+      next: snap => { set({ containers: snap.docs.map(d => ({ id: d.id, ...d.data() } as Container)) }); checkSyncComplete(); },
+      error: err => logError('containers', err)
     });
-    onSnapshot(query(collection(db, 'transactions'), orderBy('timestamp', 'desc')), snap => {
-      set({ transactions: snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)) });
-      checkSyncComplete();
+    onSnapshot(query(collection(db, 'transactions'), orderBy('timestamp', 'desc')), {
+      next: snap => { set({ transactions: snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)) }); checkSyncComplete(); },
+      error: err => logError('transactions', err)
     });
-    onSnapshot(query(collection(db, 'sales'), orderBy('timestamp', 'desc')), snap => {
-      set({ sales: snap.docs.map(d => ({ id: d.id, ...d.data() } as Sale)) });
-      checkSyncComplete();
+    onSnapshot(query(collection(db, 'sales'), orderBy('timestamp', 'desc')), {
+      next: snap => { set({ sales: snap.docs.map(d => ({ id: d.id, ...d.data() } as Sale)) }); checkSyncComplete(); },
+      error: err => logError('sales', err)
     });
-    onSnapshot(query(collection(db, 'returns'), orderBy('timestamp', 'desc')), snap => {
-      set({ returns: snap.docs.map(d => ({ id: d.id, ...d.data() } as ReturnRecord)) });
-      checkSyncComplete();
+    onSnapshot(query(collection(db, 'returns'), orderBy('timestamp', 'desc')), {
+      next: snap => { set({ returns: snap.docs.map(d => ({ id: d.id, ...d.data() } as ReturnRecord)) }); checkSyncComplete(); },
+      error: err => logError('returns', err)
     });
-    onSnapshot(query(collection(db, 'notifications'), orderBy('timestamp', 'desc')), snap => {
-      set({ notifications: snap.docs.map(d => ({ id: d.id, ...d.data() } as AppNotification)) });
-      checkSyncComplete();
+    onSnapshot(query(collection(db, 'notifications'), orderBy('timestamp', 'desc')), {
+      next: snap => { set({ notifications: snap.docs.map(d => ({ id: d.id, ...d.data() } as AppNotification)) }); checkSyncComplete(); },
+      error: err => logError('notifications', err)
     });
-    onSnapshot(collection(db, 'users'), snap => {
-      set({ users: snap.docs.map(d => ({ id: d.id, ...d.data() } as User)) });
-      checkSyncComplete();
+    onSnapshot(collection(db, 'users'), {
+      next: snap => { set({ users: snap.docs.map(d => ({ id: d.id, ...d.data() } as User)) }); checkSyncComplete(); },
+      error: err => logError('users', err)
     });
-    onSnapshot(collection(db, 'expenses'), snap => {
-      set({ expenses: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense)) });
-      checkSyncComplete();
+    onSnapshot(collection(db, 'exchange_rates'), {
+      next: snap => {
+        const rates: Record<string, number> = {};
+        snap.forEach(d => {
+          const data = d.data();
+          if (data.rate) rates[d.id] = data.rate;
+        });
+        get().setExchangeRates(rates);
+        checkSyncComplete();
+      },
+      error: err => logError('exchange_rates', err)
     });
-    onSnapshot(collection(db, 'targets'), snap => {
-      set({ targets: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopTarget)) });
-      checkSyncComplete();
+    onSnapshot(collection(db, 'expenses'), {
+      next: snap => { set({ expenses: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense)) }); checkSyncComplete(); },
+      error: err => logError('expenses', err)
+    });
+    onSnapshot(collection(db, 'targets'), {
+      next: snap => { set({ targets: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopTarget)) }); checkSyncComplete(); },
+      error: err => logError('targets', err)
     });
   },
 }));

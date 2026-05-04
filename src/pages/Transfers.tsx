@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowRightLeft, Send, AlertTriangle, ChevronRight, Activity } from 'lucide-react';
+import { ArrowRightLeft, Send, AlertTriangle, ChevronRight, Activity, Plus, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { useStore, formatCurrency } from '../store';
 import { useAuthStore } from '../store/authStore';
@@ -16,14 +16,9 @@ export default function Transfers() {
   const [form, setForm] = useState({
     from_location: '',
     to_location: '',
-    item_id: '',
-    quantity: 1,
   });
 
-  // Available inventory from source
-  const sourceEntry = form.from_location && form.item_id
-    ? inventory.find(e => e.location_id === form.from_location && e.item_id === form.item_id)
-    : null;
+  const [itemsToTransfer, setItemsToTransfer] = useState([{ item_id: '', quantity: 1, _id: Date.now() }]);
 
   const sourceItems = form.from_location
     ? inventory
@@ -50,34 +45,56 @@ export default function Transfers() {
       setError('Source and destination cannot be the same location.');
       return;
     }
-    if (!sourceEntry) {
-      setError('Selected item not in stock at source location.');
-      return;
-    }
-    if (form.quantity > sourceEntry.quantity) {
-      setError(`Only ${sourceEntry.quantity} units available at source.`);
-      return;
+    
+    // Validate all items
+    for (let i = 0; i < itemsToTransfer.length; i++) {
+      const itemTransfer = itemsToTransfer[i];
+      if (!itemTransfer.item_id) {
+         setError('Please select an item for all rows.');
+         return;
+      }
+      const entry = inventory.find(en => en.location_id === form.from_location && en.item_id === itemTransfer.item_id);
+      if (!entry) {
+        setError('Selected item not in stock at source location.');
+        return;
+      }
+      if (itemTransfer.quantity > entry.quantity) {
+        setError(`Only ${entry.quantity} units available for one of the selected items.`);
+        return;
+      }
     }
 
     setSaving(true);
     try {
-      const item = items.find(i => i.id === form.item_id);
-      await transfer({
-        from_location: form.from_location,
-        to_location: form.to_location,
-        item_id: form.item_id,
-        item_name: item?.name ?? '',
-        quantity: form.quantity,
-        unit_cost_INR: sourceEntry.avg_cost_INR,
-        performed_by: appUser?.name ?? 'Staff',
-      });
+      await Promise.all(itemsToTransfer.map(async itemTransfer => {
+        const item = items.find(i => i.id === itemTransfer.item_id);
+        const entry = inventory.find(en => en.location_id === form.from_location && en.item_id === itemTransfer.item_id);
+        return transfer({
+          from_location: form.from_location,
+          to_location: form.to_location,
+          item_id: itemTransfer.item_id,
+          item_name: item?.name ?? '',
+          quantity: itemTransfer.quantity,
+          unit_cost_INR: entry?.avg_cost_INR ?? 0,
+          performed_by: appUser?.name ?? 'Staff',
+        });
+      }));
       setIsModalOpen(false);
-      setForm({ from_location: '', to_location: '', item_id: '', quantity: 1 });
+      setForm({ from_location: '', to_location: '' });
+      setItemsToTransfer([{ item_id: '', quantity: 1, _id: Date.now() }]);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setSaving(false);
     }
+  };
+
+  const addItemRow = () => {
+    setItemsToTransfer([...itemsToTransfer, { item_id: '', quantity: 1, _id: Date.now() }]);
+  };
+
+  const removeItemRow = (index: number) => {
+    setItemsToTransfer(itemsToTransfer.filter((_, i) => i !== index));
   };
 
   return (
@@ -92,12 +109,12 @@ export default function Transfers() {
             Stock Logistics
           </h1>
           <p className="text-xs sm:text-sm text-gray-400 font-bold uppercase tracking-widest mt-2 ml-12 sm:ml-14 border-l-2 border-gray-100 pl-4 uppercase tracking-tighter">
-            Execute and audit inter-node item migrations.
+            Manage item transfers between shops.
           </p>
         </div>
         <button onClick={() => { setIsModalOpen(true); setError(''); }} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-12 px-6 self-start sm:self-auto ml-12 sm:ml-0">
           <Send className="w-4 h-4" /> 
-          <span className="whitespace-nowrap font-black uppercase tracking-widest text-[10px]">Execute Migration</span>
+          <span className="whitespace-nowrap font-black uppercase tracking-widest text-[10px]">Transfer Items</span>
         </button>
       </div>
 
@@ -145,10 +162,10 @@ export default function Transfers() {
              <table className="w-full text-sm text-left min-w-[800px]">
                <thead className="bg-gray-50/50 text-[10px] uppercase text-gray-400 font-black tracking-widest">
                  <tr>
-                   <th className="px-6 py-4">Node Path</th>
+                   <th className="px-6 py-4">Transfer Path</th>
                    <th className="px-6 py-4">Object Vector</th>
                    <th className="px-6 py-4 text-right">Commitment</th>
-                   <th className="px-6 py-4 text-right">Node Valuation</th>
+                   <th className="px-6 py-4 text-right">Value</th>
                    <th className="px-6 py-4">Authorizing Signature</th>
                  </tr>
                </thead>
@@ -252,19 +269,22 @@ export default function Transfers() {
          </div>
        </div>
 
-      <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setError(''); }} title="Node Migration Vector" description="Rotate synchronized objects between node anchors." size="md">
+      <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setError(''); }} title="Transfer Items" description="Transfer items between shops." size="md">
         <form onSubmit={handleTransfer} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
-              <label className="label">Source Node Anchor</label>
+              <label className="label">From Shop</label>
               <select title="Source Location" required className="input-field h-12 bg-white font-bold" value={form.from_location}
-                onChange={e => setForm(f => ({ ...f, from_location: e.target.value, item_id: '', quantity: 1 }))}>
+                onChange={e => {
+                  setForm(f => ({ ...f, from_location: e.target.value }));
+                  setItemsToTransfer([{ item_id: '', quantity: 1, _id: Date.now() }]);
+                }}>
                 <option value="">Identify source…</option>
                 {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
               </select>
             </div>
             <div>
-              <label className="label">Destination Node Anchor</label>
+              <label className="label">To Shop</label>
               <select title="Destination Location" required className="input-field h-12 bg-white font-bold" value={form.to_location}
                 onChange={e => setForm(f => ({ ...f, to_location: e.target.value }))}>
                 <option value="">Target destination…</option>
@@ -274,35 +294,73 @@ export default function Transfers() {
               </select>
             </div>
 
-            <div className="md:col-span-2">
-              <label className="label">Migration Object Identity</label>
-              <select title="Select Item" required className="input-field h-12 bg-white font-bold" value={form.item_id}
-                onChange={e => setForm(f => ({ ...f, item_id: e.target.value, quantity: 1 }))}
-                disabled={!form.from_location}>
-                <option value="">Identify object buffer…</option>
-                {sourceItems.map(e => (
-                  <option key={e.item_id} value={e.item_id}>
-                    {e.item!.name} — {e.quantity} Available Nodes (avg {formatCurrency(e.avg_cost_INR)})
-                  </option>
-                ))}
-              </select>
+            <div className="md:col-span-2 space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="label">Items to Transfer</label>
+                <button type="button" onClick={addItemRow} className="text-xs text-primary font-bold flex items-center gap-1 hover:text-primary-dark">
+                  <Plus className="w-4 h-4" /> Add Item
+                </button>
+              </div>
+
+              {itemsToTransfer.map((itemRow, index) => {
+                const rowEntry = form.from_location && itemRow.item_id
+                  ? inventory.find(e => e.location_id === form.from_location && e.item_id === itemRow.item_id)
+                  : null;
+
+                return (
+                  <div key={itemRow._id} className="p-4 border border-gray-100 rounded-xl bg-gray-50/50 space-y-4">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-[10px] uppercase font-black tracking-widest text-gray-400">Item #{index + 1}</span>
+                      {itemsToTransfer.length > 1 && (
+                        <button title="Remove Item" type="button" onClick={() => removeItemRow(index)} className="text-red-400 hover:text-red-600 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="sm:col-span-2">
+                        <select title="Select Item" required className="input-field h-12 bg-white font-bold w-full" value={itemRow.item_id}
+                          onChange={e => {
+                            const newItems = [...itemsToTransfer];
+                            newItems[index].item_id = e.target.value;
+                            setItemsToTransfer(newItems);
+                          }}
+                          disabled={!form.from_location}>
+                          <option value="">Choose an item…</option>
+                          {sourceItems.map(e => (
+                            <option key={e.item_id} value={e.item_id}>
+                              {e.item!.name} — {e.quantity} Available (avg {formatCurrency(e.avg_cost_INR)})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <input title="Quantity" placeholder="Qty" required type="number" min={1} max={rowEntry?.quantity ?? undefined} className="input-field h-12 text-lg font-black w-full"
+                          value={itemRow.quantity || ''}
+                          onChange={e => {
+                            const newItems = [...itemsToTransfer];
+                            newItems[index].quantity = Number(e.target.value);
+                            setItemsToTransfer(newItems);
+                          }} />
+                      </div>
+                    </div>
+
+                    {rowEntry && (
+                      <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-widest bg-white p-3 rounded-lg border border-gray-100">
+                        <span className="text-gray-400">Available: <span className="text-primary">{rowEntry.quantity}u</span></span>
+                        <span className="text-gray-400">Transfer Value: <span className="text-primary">{formatCurrency(rowEntry.avg_cost_INR * itemRow.quantity)}</span></span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
               {form.from_location && sourceItems.length === 0 && (
                 <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mt-2 flex items-center gap-1">
-                   <AlertTriangle className="w-3 h-3" /> Zero Buffered Stock
+                   <AlertTriangle className="w-3 h-3" /> Zero Available Stock
                 </p>
-              )}
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="label">Vector Magnitude (Quantity)</label>
-              <input title="Quantity" placeholder="0" required type="number" min={1} max={sourceEntry?.quantity ?? undefined} className="input-field h-12 text-lg font-black"
-                value={form.quantity || ''}
-                onChange={e => setForm(f => ({ ...f, quantity: Number(e.target.value) }))} />
-              {sourceEntry && (
-                <div className="mt-3 flex items-center justify-between text-[11px] font-bold uppercase tracking-widest bg-gray-50 p-3 rounded-xl border border-gray-100">
-                  <span className="text-gray-400">Node Limit: <span className="text-primary">{sourceEntry.quantity}u</span></span>
-                  <span className="text-gray-400">Migration Value: <span className="text-primary">{formatCurrency(sourceEntry.avg_cost_INR * form.quantity)}</span></span>
-                </div>
               )}
             </div>
           </div>
@@ -314,9 +372,9 @@ export default function Transfers() {
           )}
 
           <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t border-gray-100">
-            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => { setIsModalOpen(false); setError(''); }}>Abort Migration</button>
-            <button type="submit" className="btn-primary h-12 px-10 font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20" disabled={saving || !sourceEntry}>
-              {saving ? 'Transmitting Data…' : 'Execute Transmission'}
+            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => { setIsModalOpen(false); setError(''); }}>Cancel</button>
+            <button type="submit" className="btn-primary h-12 px-10 font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20" disabled={saving || itemsToTransfer.some(i => !i.item_id) || itemsToTransfer.some(i => !i.quantity)}>
+              {saving ? 'Transferring…' : 'Transfer'}
             </button>
           </div>
         </form>

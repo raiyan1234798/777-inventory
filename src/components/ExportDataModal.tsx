@@ -63,7 +63,8 @@ export default function ExportDataModal({ isOpen, onClose }: ExportDataModalProp
           expenses,
           transfers: transactions,
           items,
-          locations
+          locations,
+          transactions
         },
         config
       );

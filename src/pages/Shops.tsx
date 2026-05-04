@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react';
-import { ShoppingCart, TrendingUp, Search, Store, AlertTriangle, Globe, ChevronRight, Activity } from 'lucide-react';
+import { ShoppingCart, TrendingUp, Search, Store, AlertTriangle, Globe, ChevronRight, Activity, Plus, Trash2, Warehouse, FileText } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Modal from '../components/Modal';
 import { useStore, CURRENCIES, formatCurrency, formatDualCurrency, toINR, type InventoryEntry, type Item, type Location } from '../store';
 import { useAuthStore } from '../store/authStore';
+import { exportDailySalesReport } from '../lib/bulkOperations';
 import { format } from 'date-fns';
 import clsx from 'clsx';
 
@@ -11,7 +12,8 @@ type ShopRow = InventoryEntry & { item: Item; loc: Location; isLow: boolean };
 
 export default function Shops() {
   const { appUser } = useAuthStore();
-  const { locations, items, inventory, sales, recordSale } = useStore();
+  const { locations, items, inventory, sales, recordSale, brands, transactions } = useStore();
+  const [exporting, setExporting] = useState(false);
 
   const shops = locations.filter(l => l.type === 'shop');
   const [filterShop, setFilterShop] = useState('');
@@ -19,13 +21,23 @@ export default function Shops() {
   const [saleModal, setSaleModal] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const [saleForm, setSaleForm] = useState({
-    location_id: '',
-    item_id: '',
-    quantity: 1,
-    selling_price: 0,
-    currency: 'INR',
-  });
+  const [saleLocation, setSaleLocation] = useState('');
+  const [saleItems, setSaleItems] = useState([{ item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
+  
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [isStockModalOpen, setIsStockModalOpen] = useState(false);
+
+  const stockDistribution = useMemo(() => {
+    if (!selectedItemId) return null;
+    const item = items.find(i => i.id === selectedItemId);
+    const distributions = locations.map(loc => {
+      const qty = inventory
+        .filter(e => e.item_id === selectedItemId && e.location_id === loc.id)
+        .reduce((sum, e) => sum + e.quantity, 0);
+      return { ...loc, qty };
+    }).filter(d => d.qty > 0);
+    return { item, distributions };
+  }, [selectedItemId, inventory, items, locations]);
 
   const shopInventoryRows = useMemo((): ShopRow[] => {
     const shopIds = (filterShop ? [filterShop] : shops.map(s => s.id));
@@ -56,32 +68,49 @@ export default function Shops() {
     ? sales.filter(s => s.location_id === filterShop)
     : sales;
 
-  const selectedItem = items.find(i => i.id === saleForm.item_id);
-  const availableQty = saleForm.location_id && saleForm.item_id
-    ? inventory.find(e => e.location_id === saleForm.location_id && e.item_id === saleForm.item_id)?.quantity ?? 0
-    : 0;
-  const estimatedProfit = selectedItem && saleForm.selling_price > 0
-    ? toINR(saleForm.selling_price * saleForm.quantity, saleForm.currency) -
-      (inventory.find(e => e.location_id === saleForm.location_id && e.item_id === saleForm.item_id)?.avg_cost_INR ?? 0) * saleForm.quantity
-    : 0;
+  const totalEstimatedProfit = saleItems.reduce((acc, si) => {
+    if (!si.item_id || si.selling_price <= 0) return acc;
+    const cost = inventory.find(e => e.location_id === saleLocation && e.item_id === si.item_id)?.avg_cost_INR ?? 0;
+    const profit = toINR(si.selling_price * si.quantity, si.currency) - (cost * si.quantity);
+    return acc + profit;
+  }, 0);
+
+  const totalAmount = saleItems.reduce((acc, si) => acc + toINR(si.selling_price * si.quantity, si.currency), 0);
 
   const handleRecordSale = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedItem) return;
+    if (!saleLocation) return;
     setSaving(true);
     try {
-      await recordSale({
-        ...saleForm,
-        item_name: selectedItem.name,
-        sold_by: appUser?.name ?? 'Staff',
-      });
+      await Promise.all(saleItems.map(si => {
+        const item = items.find(i => i.id === si.item_id);
+        if (!item) throw new Error('Item missing');
+        return recordSale({
+          location_id: saleLocation,
+          item_id: si.item_id,
+          item_name: item.name,
+          quantity: si.quantity,
+          selling_price: si.selling_price,
+          currency: si.currency,
+          sold_by: appUser?.name ?? 'Staff',
+        });
+      }));
       setSaleModal(false);
-      setSaleForm({ location_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR' });
+      setSaleLocation('');
+      setSaleItems([{ item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
     } catch (err: any) {
       alert(err.message);
     } finally {
       setSaving(false);
     }
+  };
+
+  const addSaleItemRow = () => {
+    setSaleItems([...saleItems, { item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
+  };
+
+  const removeSaleItemRow = (index: number) => {
+    setSaleItems(saleItems.filter((_, i) => i !== index));
   };
 
   return (
@@ -96,16 +125,39 @@ export default function Shops() {
             Retail Front
           </h1>
           <p className="text-xs sm:text-sm text-gray-400 font-bold uppercase tracking-widest mt-2 ml-12 sm:ml-14 border-l-2 border-gray-100 pl-4 uppercase tracking-tighter">
-            Manage shop-side inventory and retail conversions.
+            Manage your shop inventory and daily sales.
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2.5 sm:items-center ml-12 sm:ml-0">
+          {filterShop && (
+            <button
+              disabled={exporting}
+              onClick={async () => {
+                setExporting(true);
+                try {
+                  await exportDailySalesReport({
+                    locationId: filterShop,
+                    date: new Date().toISOString().split('T')[0],
+                    sales, locations, items, brands, inventory, transactions,
+                  });
+                } catch (err: any) {
+                  alert('Export failed: ' + err.message);
+                } finally {
+                  setExporting(false);
+                }
+              }}
+              className="btn-secondary flex items-center gap-2 text-sm justify-center h-11 px-5 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 transition-all font-bold disabled:opacity-50"
+            >
+              <FileText className="w-4 h-4" />
+              <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-widest">{exporting ? 'Exporting...' : "Today's Sales Report"}</span>
+            </button>
+          )}
           <Link to="/manage-shops" className="btn-secondary flex items-center gap-2.5 text-sm justify-center h-11 px-5 shadow-sm">
-            <Globe className="w-4 h-4" /> 
+            <Globe className="w-4 h-4" />
             <span className="font-black uppercase tracking-widest text-[10px]">Manage Profiles</span>
           </Link>
           <button onClick={() => setSaleModal(true)} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-11 px-6">
-            <ShoppingCart className="w-4 h-4" /> 
+            <ShoppingCart className="w-4 h-4" />
             <span className="font-black uppercase tracking-widest text-[10px]">Record Sale</span>
           </button>
         </div>
@@ -114,41 +166,41 @@ export default function Shops() {
       {/* Stats Grid */}
       <div className="responsive-grid">
         <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-50/50 p-6 flex flex-col justify-between">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Daily Velocity</p>
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Today's Revenue</p>
           <div>
             <p className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{formatCurrency(dayRevenue)}</p>
             <div className="flex items-center gap-1.5 mt-2">
               <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-600 font-black text-[9px] uppercase tracking-tighter">
                 {daySales.length} Units
               </span>
-              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Target Window</p>
+              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Sold Today</p>
             </div>
           </div>
         </div>
         <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-50/50 p-6 flex flex-col justify-between">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Gross Net (Mo)</p>
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Monthly Profit</p>
           <div>
             <p className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{formatCurrency(monthProfit)}</p>
             <div className="flex items-center gap-1.5 mt-2">
               <div className="w-4 h-4 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
                 <Activity className="w-2.5 h-2.5" />
               </div>
-              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Monthly Commitment</p>
+              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Monthly Totals</p>
             </div>
           </div>
         </div>
         <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-200/20 p-6 flex flex-col justify-between sm:col-span-2 lg:col-span-1">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">System Profit</p>
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Total Profit</p>
           <div>
             <p className="text-3xl font-black text-emerald-600 tracking-tighter tabular-nums">{formatCurrency(sales.reduce((s, x) => s + x.profit_INR, 0))}</p>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2 uppercase tracking-tighter">Historical Accumulation</p>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2 uppercase tracking-tighter">All-time Profit</p>
           </div>
         </div>
         <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-50/50 p-6 flex flex-col justify-between hidden lg:flex">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Network Scale</p>
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Total Shops</p>
           <div>
-            <p className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{shops.length} Nodes</p>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2">Retail Nodes Active</p>
+            <p className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{shops.length} Shops</p>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2">Active Locations</p>
           </div>
         </div>
       </div>
@@ -157,11 +209,11 @@ export default function Shops() {
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
         <div className="relative flex-1">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Query node objects…" className="w-full pl-11 pr-4 py-2.5 bg-gray-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-primary/20 transition-all font-medium" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search inventory…" className="w-full pl-11 pr-4 py-2.5 bg-gray-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-primary/20 transition-all font-medium" />
         </div>
         <div className="flex h-full">
            <select title="Filter by Shop" value={filterShop} onChange={e => setFilterShop(e.target.value)} className="w-full sm:w-64 px-4 py-2.5 bg-white border border-gray-100 rounded-xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-primary/20 outline-none">
-            <option value="">Global Unified View</option>
+            <option value="">All Shops</option>
             {shops.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
@@ -173,9 +225,9 @@ export default function Shops() {
             <div className="flex items-center justify-between px-2">
              <h2 className="text-base font-extrabold text-gray-900 flex items-center gap-2.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-                Node Object Mapping
+                Shop Inventory
              </h2>
-             <p className="text-[10px] font-black uppercase tracking-widest text-gray-300">{shopInventoryRows.length} Vectors Identified</p>
+             <p className="text-[10px] font-black uppercase tracking-widest text-gray-300">{shopInventoryRows.length} Items Found</p>
            </div>
            
            {/* Desktop Table View */}
@@ -184,11 +236,11 @@ export default function Shops() {
                <table className="w-full text-sm text-left min-w-[600px]">
                  <thead className="bg-gray-50 text-[10px] uppercase text-gray-400 font-black tracking-widest">
                    <tr>
-                     <th className="px-6 py-4">Descriptor</th>
-                     <th className="px-6 py-4">Node Anchor</th>
-                     <th className="px-6 py-4 text-right">Commitment</th>
-                     <th className="px-6 py-4 text-right">Landed Cost</th>
-                     <th className="px-6 py-4 text-center">Status Vane</th>
+                     <th className="px-6 py-4">Item Details</th>
+                     <th className="px-6 py-4">Shop Name</th>
+                     <th className="px-6 py-4 text-right">Available Stock</th>
+                     <th className="px-6 py-4 text-right">Cost Price</th>
+                     <th className="px-6 py-4 text-center">Status</th>
                    </tr>
                  </thead>
                  <tbody className="divide-y divide-gray-50 bg-white">
@@ -197,8 +249,8 @@ export default function Shops() {
                        <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
                          <Store className="w-8 h-8 opacity-10" />
                        </div>
-                       <p className="font-extrabold text-gray-700 tracking-tight">Node Buffer Empty</p>
-                       <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Move objects from secondary nodes via Transfers.</p>
+                       <p className="font-extrabold text-gray-700 tracking-tight">No Inventory Available</p>
+                       <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Transfer items to this shop from the warehouse.</p>
                      </td></tr>
                    ) : shopInventoryRows.map(r => (
                      <tr key={r.id} className={clsx("hover:bg-gray-50/50 transition-colors group", r.isLow && 'bg-red-50/20')}>
@@ -212,7 +264,17 @@ export default function Shops() {
                             <span className="text-sm font-bold text-gray-600">{r.loc.name}</span>
                          </div>
                        </td>
-                       <td className="px-6 py-4 text-right font-black text-gray-900 text-lg tracking-tighter tabular-nums">{r.quantity}</td>
+                       <td className="px-6 py-4 text-right">
+                         <button 
+                           onClick={() => {
+                             setSelectedItemId(r.item_id);
+                             setIsStockModalOpen(true);
+                           }}
+                           className="font-black text-gray-900 text-lg tracking-tighter tabular-nums hover:text-primary transition-colors decoration-primary/30 underline underline-offset-4"
+                         >
+                           {r.quantity}
+                         </button>
+                       </td>
                        <td className="px-6 py-4 text-right tabular-nums text-gray-500 font-bold">{formatCurrency(r.avg_cost_INR)}</td>
                        <td className="px-6 py-4 text-center">
                          {r.isLow
@@ -234,8 +296,8 @@ export default function Shops() {
                  <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
                    <Store className="w-8 h-8 opacity-10" />
                  </div>
-                 <p className="font-extrabold text-gray-700 tracking-tight">Node Buffer Empty</p>
-                 <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Move objects from secondary nodes via Transfers.</p>
+                 <p className="font-extrabold text-gray-700 tracking-tight">No Inventory Available</p>
+                 <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Transfer items to this shop from the warehouse.</p>
                </div>
              ) : (
                <div className="space-y-3">
@@ -249,10 +311,17 @@ export default function Shops() {
                      </div>
 
                      <div className="grid grid-cols-2 gap-2 mb-3">
-                       <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
-                         <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Qty</p>
-                         <p className="text-sm font-black text-blue-900 mt-1 tabular-nums">{r.quantity}</p>
-                       </div>
+                        <button 
+                           onClick={() => {
+                             setSelectedItemId(r.item_id);
+                             setIsStockModalOpen(true);
+                           }}
+                           className="bg-blue-50 rounded-lg p-3 border border-blue-100 flex flex-col items-start w-full text-left active:bg-blue-100 transition-colors"
+                        >
+                          <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider font-black">Available Qty</p>
+                          <p className="text-sm font-black text-blue-900 mt-1 tabular-nums underline decoration-2 underline-offset-4">{r.quantity}</p>
+                          <p className="text-[8px] font-black text-primary uppercase mt-1">View All Locations →</p>
+                        </button>
                        <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100">
                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Cost</p>
                          <p className="text-sm font-black text-emerald-900 mt-1">{formatCurrency(r.avg_cost_INR)}</p>
@@ -287,7 +356,7 @@ export default function Shops() {
           <div className="flex items-center justify-between px-2">
             <h2 className="text-base font-extrabold text-gray-900 flex items-center gap-2.5">
                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-               Latest Conversions
+               Recent Sales
             </h2>
             <TrendingUp className="w-4 h-4 text-gray-200" />
           </div>
@@ -295,7 +364,7 @@ export default function Shops() {
             {filteredSales.length === 0 ? (
               <div className="p-12 text-center">
                 <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-10" />
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">No terminal transactions</p>
+                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">No recent sales</p>
               </div>
             ) : (
               filteredSales.slice(0, 10).map(sale => (
@@ -327,81 +396,177 @@ export default function Shops() {
         </div>
       </div>
 
-      <Modal isOpen={saleModal} onClose={() => setSaleModal(false)} title="Terminal Conversion" description="Finalize a retail sale event at a shop node." size="md">
+      <Modal isOpen={saleModal} onClose={() => setSaleModal(false)} title="Record a Sale" description="Enter the details of the item sold." size="md">
         <form onSubmit={handleRecordSale} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="md:col-span-2">
-              <label className="label">Node Anchor</label>
-              <select title="Select Shop Location" required className="input-field h-12 bg-white font-bold" value={saleForm.location_id} 
-                onChange={e => setSaleForm(f => ({ ...f, location_id: e.target.value, item_id: '' }))}>
-                <option value="">Identify anchor node…</option>
+              <label className="label">Shop Location</label>
+              <select title="Select Shop Location" required className="input-field h-12 bg-white font-bold" value={saleLocation} 
+                onChange={e => {
+                  setSaleLocation(e.target.value);
+                  setSaleItems([{ item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
+                }}>
+                <option value="">Select a shop…</option>
                 {shops.map(s => <option key={s.id} value={s.id}>{s.name} ({s.country})</option>)}
               </select>
             </div>
-            <div className="md:col-span-2">
-              <label className="label">Object Identification</label>
-              <select title="Select Item" required className="input-field h-12 bg-white font-bold" 
-                value={saleForm.item_id} 
-                onChange={e => {
-                  const item = items.find(i => i.id === e.target.value);
-                  setSaleForm(f => ({ 
-                    ...f, 
-                    item_id: e.target.value, 
-                    quantity: 1, 
-                    selling_price: item?.retail_price || 0 
-                  }));
-                }}
-                disabled={!saleForm.location_id}>
-                <option value="">Scan object…</option>
-                {inventory
-                  .filter(e => e.location_id === saleForm.location_id && e.quantity > 0)
-                  .map(e => {
-                    const item = items.find(i => i.id === e.item_id);
-                    return item ? <option key={e.item_id} value={e.item_id}>{item.name} ({e.quantity} Available)</option> : null;
-                  })}
-              </select>
-            </div>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-3 md:col-span-2 gap-5">
-              <div>
-                <label className="label">Units</label>
-                <input title="Quantity" placeholder="0" required type="number" min={1} max={availableQty} className="input-field h-12 text-lg font-black" value={saleForm.quantity || ''} onChange={e => setSaleForm(f => ({ ...f, quantity: Number(e.target.value) }))} />
+
+            <div className="md:col-span-2 space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="label">Items Sold</label>
+                <button type="button" onClick={addSaleItemRow} className="text-xs text-primary font-bold flex items-center gap-1 hover:text-primary-dark">
+                  <Plus className="w-4 h-4" /> Add Item
+                </button>
               </div>
-              <div className="sm:col-span-2">
-                <label className="label">Retail (Unit)</label>
-                <div className="flex gap-2">
-                  <input title="Selling Price" placeholder="0.00" required type="number" min={0} step="0.01" className="flex-1 input-field h-12 text-lg font-black" value={saleForm.selling_price || ''} onChange={e => setSaleForm(f => ({ ...f, selling_price: Number(e.target.value) }))} />
-                  <select title="Currency" className="w-24 input-field h-12 bg-white font-bold" value={saleForm.currency} onChange={e => setSaleForm(f => ({ ...f, currency: e.target.value }))}>
-                    {CURRENCIES.map(c => <option key={c}>{c}</option>)}
-                  </select>
-                </div>
-              </div>
+
+              {saleItems.map((si, index) => {
+                const availableQty = saleLocation && si.item_id
+                  ? inventory.find(e => e.location_id === saleLocation && e.item_id === si.item_id)?.quantity ?? 0
+                  : 0;
+                
+                return (
+                  <div key={si._id} className="p-4 border border-gray-100 rounded-xl bg-gray-50/50 space-y-4">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-[10px] uppercase font-black tracking-widest text-gray-400">Item #{index + 1}</span>
+                      {saleItems.length > 1 && (
+                        <button title="Remove Item" type="button" onClick={() => removeSaleItemRow(index)} className="text-red-400 hover:text-red-600 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="md:col-span-2">
+                      <select title="Select Item" required className="input-field h-12 bg-white font-bold w-full" 
+                        value={si.item_id} 
+                        onChange={e => {
+                          const item = items.find(i => i.id === e.target.value);
+                          const newRows = [...saleItems];
+                          newRows[index].item_id = e.target.value;
+                          newRows[index].selling_price = item?.retail_price || 0;
+                          setSaleItems(newRows);
+                        }}
+                        disabled={!saleLocation}>
+                        <option value="">Choose an item…</option>
+                        {inventory
+                          .filter(e => e.location_id === saleLocation && e.quantity > 0)
+                          .map(e => {
+                            const item = items.find(i => i.id === e.item_id);
+                            return item ? <option key={e.item_id} value={e.item_id}>{item.name} ({e.quantity} Available)</option> : null;
+                          })}
+                      </select>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                      <div>
+                        <input title="Quantity" placeholder="0" required type="number" min={1} max={availableQty || undefined} className="input-field h-12 text-lg font-black w-full" 
+                          value={si.quantity || ''} 
+                          onChange={e => {
+                            const newRows = [...saleItems];
+                            newRows[index].quantity = Number(e.target.value);
+                            setSaleItems(newRows);
+                          }} />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <div className="flex gap-2">
+                          <input title="Selling Price" placeholder="0.00" required type="number" min={0} step="0.01" className="flex-1 input-field h-12 text-lg font-black" 
+                            value={si.selling_price || ''} 
+                            onChange={e => {
+                              const newRows = [...saleItems];
+                              newRows[index].selling_price = Number(e.target.value);
+                              setSaleItems(newRows);
+                            }} />
+                          <select title="Currency" className="w-24 input-field h-12 bg-white font-bold" 
+                            value={si.currency} 
+                            onChange={e => {
+                              const newRows = [...saleItems];
+                              newRows[index].currency = e.target.value;
+                              setSaleItems(newRows);
+                            }}>
+                            {CURRENCIES.map(c => <option key={c}>{c}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
-          {saleForm.selling_price > 0 && selectedItem && (
+          {totalAmount > 0 && (
             <div className={clsx(
               "rounded-2xl p-5 border shadow-inner flex items-center justify-between",
-              estimatedProfit >= 0 ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-red-50 border-red-100 text-red-700'
+              totalEstimatedProfit >= 0 ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-red-50 border-red-100 text-red-700'
             )}>
               <div className="space-y-1">
-                <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Estimated Yield</p>
-                <p className="text-2xl font-black tracking-tight">{formatCurrency(estimatedProfit)}</p>
+                <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Estimated Profit (Total)</p>
+                <p className="text-2xl font-black tracking-tight">{formatCurrency(totalEstimatedProfit)}</p>
               </div>
               <div className="text-right">
-                <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Revenue Flow</p>
-                <p className="text-lg font-bold">{formatDualCurrency(saleForm.selling_price * saleForm.quantity, saleForm.currency)}</p>
+                <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Total Amount (INR Base)</p>
+                <p className="text-lg font-bold">{formatCurrency(totalAmount)}</p>
               </div>
             </div>
           )}
 
           <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t border-gray-100">
-            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => setSaleModal(false)}>Abort Event</button>
-            <button type="submit" className="btn-primary h-12 px-10 font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20" disabled={saving || !selectedItem}>
-              {saving ? 'Processing Vector…' : 'Finalize Sale'}
+            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => setSaleModal(false)}>Cancel</button>
+            <button type="submit" className="btn-primary h-12 px-10 font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20" disabled={saving || saleItems.some(si => !si.item_id)}>
+              {saving ? 'Processing...' : 'Complete Sale'}
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Stock Distribution Modal */}
+      <Modal 
+        isOpen={isStockModalOpen} 
+        onClose={() => setIsStockModalOpen(false)} 
+        title="Inventory Hub Pulse" 
+        description={stockDistribution?.item?.name}
+        size="md"
+      >
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="p-5 bg-blue-50/50 rounded-2xl border border-blue-100/50">
+                <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">Backup Stock</p>
+                <h3 className="text-2xl font-black text-gray-900 tracking-tighter">
+                  {stockDistribution?.distributions.filter(d => d.type === 'warehouse').reduce((s, d) => s + d.qty, 0).toLocaleString()} <span className="text-xs font-bold text-gray-400">Units</span>
+                </h3>
+            </div>
+            <div className="p-5 bg-emerald-50/50 rounded-2xl border border-emerald-100/50">
+                <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1">On Display</p>
+                <h3 className="text-2xl font-black text-gray-900 tracking-tighter">
+                  {stockDistribution?.distributions.filter(d => d.type === 'shop').reduce((s, d) => s + d.qty, 0).toLocaleString()} <span className="text-xs font-bold text-gray-400">Units</span>
+                </h3>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Presence Across Network</h5>
+            <div className="bg-gray-50/50 rounded-[1.5rem] border border-gray-100 overflow-hidden divide-y divide-gray-100">
+                {stockDistribution?.distributions.map(loc => (
+                  <div key={loc.id} className="p-4 flex items-center justify-between hover:bg-white transition-colors">
+                    <div className="flex items-center gap-3">
+                        <div className={clsx(
+                          "w-10 h-10 rounded-xl flex items-center justify-center",
+                          loc.type === 'warehouse' ? 'bg-blue-100 text-blue-600' : 'bg-emerald-100 text-emerald-600'
+                        )}>
+                          {loc.type === 'warehouse' ? <Warehouse className="w-5 h-5" /> : <Store className="w-5 h-5" />}
+                        </div>
+                        <div>
+                          <p className="text-sm font-black text-gray-900">{loc.name}</p>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-tight">{loc.type} · {loc.country}</p>
+                        </div>
+                    </div>
+                    <div className="text-right">
+                        <p className="text-sm font-black text-gray-900 tabular-nums">{loc.qty.toLocaleString()} Units</p>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
       </Modal>
     </div>
   );

@@ -103,7 +103,7 @@ export default function Users() {
             Team Directory
           </h1>
           <p className="text-xs sm:text-sm text-gray-400 font-bold uppercase tracking-widest mt-2 ml-12 sm:ml-14 border-l-2 border-gray-100 pl-4 uppercase tracking-tighter">
-            Manage access control and node assignments.
+            Manage access control and shop assignments.
           </p>
         </div>
         <button onClick={openAdd} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-12 px-6 self-start sm:self-auto ml-12 sm:ml-0">
@@ -143,7 +143,7 @@ export default function Users() {
                 : 'bg-white text-gray-500 border-gray-100 hover:bg-gray-50'
             )}
           >
-            All Nodes
+            All Shops
           </button>
           {(Object.keys(ROLE_LABELS) as Role[]).map(role => (
             <button
@@ -170,7 +170,7 @@ export default function Users() {
               <tr>
                 <th className="px-6 py-4">Identity</th>
                 <th className="px-6 py-4">Access Level</th>
-                <th className="px-6 py-4 font-center">Commitment Node</th>
+                <th className="px-6 py-4 font-center">Assigned Shop</th>
                 <th className="px-6 py-4 text-center">Status Flag</th>
                 <th className="px-6 py-4 text-right">Vectors</th>
               </tr>
@@ -207,7 +207,7 @@ export default function Users() {
                   <td className="px-6 py-5">
                     <div className="flex items-center gap-2 text-gray-600 font-bold tracking-tight">
                        <MapPin className="w-3.5 h-3.5 text-gray-300" />
-                       {locations.find(l => l.id === user.location_id)?.name ?? (user.location_id || 'Global Node')}
+                       {locations.find(l => l.id === user.location_id)?.name ?? (user.location_id || 'Global (All Shops)')}
                     </div>
                   </td>
                   <td className="px-6 py-5 text-center">
@@ -236,7 +236,7 @@ export default function Users() {
       </div>
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? 'Edit Identity' : 'Enroll Identity'} description={editingId ? 'Modify node privileges and access vectors.' : 'Initialize a new team member into the global directory.'} size="md">
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? 'Edit Identity' : 'Enroll Identity'} description={editingId ? 'Modify privileges and shop access.' : 'Initialize a new team member into the global directory.'} size="md">
         <form onSubmit={handleSave} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="md:col-span-2">
@@ -271,9 +271,9 @@ export default function Users() {
               </select>
             </div>
             <div className="md:col-span-2">
-              <label className="label">Primary Node Assignment</label>
+              <label className="label">Primary Shop Assignment</label>
               <select title="Location" className="input-field h-12 bg-white font-bold" value={form.location_id} onChange={e => setForm(f => ({ ...f, location_id: e.target.value }))}>
-                <option value="">Global Authority / All Nodes</option>
+                <option value="">Global Authority / All Shops</option>
                 {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
               </select>
             </div>

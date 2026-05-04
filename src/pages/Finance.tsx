@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react';
 import {
   DollarSign, TrendingUp, TrendingDown, Package,
-  BarChart3, ShoppingCart, Globe2, PieChart, Activity
+  BarChart3, ShoppingCart, Globe2, Activity,
+  ArrowUpRight, Target, Zap
 } from 'lucide-react';
 import { useStore, formatCurrency, EXCHANGE_RATES, CURRENCIES } from '../store';
 import { format } from 'date-fns';
 import clsx from 'clsx';
+import { Sparkline, DonutChart, Gauge } from '../components/DashboardCharts';
 
 export default function Finance() {
   const { sales, containers, locations, items, inventory } = useStore();
@@ -39,21 +41,23 @@ export default function Finance() {
     };
   }, [sales, containers, inventory, items]);
 
-  // Sales by location
+  // Sales by location for Donut
   const salesByLocation = useMemo(() => {
-    const map: Record<string, { revenue: number; profit: number; count: number }> = {};
+    const map: Record<string, number> = {};
     sales.forEach(s => {
-      if (!map[s.location_id]) map[s.location_id] = { revenue: 0, profit: 0, count: 0 };
-      map[s.location_id].revenue += s.converted_price_INR;
-      map[s.location_id].profit += s.profit_INR;
-      map[s.location_id].count += 1;
+      map[s.location_id] = (map[s.location_id] || 0) + s.converted_price_INR;
     });
+    const colors = ['#3b82f6', '#10b981', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6'];
     return Object.entries(map)
-      .map(([id, data]) => ({ ...data, location: locations.find(l => l.id === id)?.name ?? id }))
-      .sort((a, b) => b.revenue - a.revenue);
+      .map(([id, val], i) => ({ 
+        label: locations.find(l => l.id === id)?.name ?? id, 
+        value: val,
+        color: colors[i % colors.length]
+      }))
+      .sort((a, b) => b.value - a.value);
   }, [sales, locations]);
 
-  // Sales by currency (original currency distribution)
+  // Sales by currency
   const salesByCurrency = useMemo(() => {
     const map: Record<string, number> = {};
     sales.forEach(s => {
@@ -61,15 +65,15 @@ export default function Finance() {
     });
     const total = Object.values(map).reduce((a, b) => a + b, 0) || 1;
     const colors: Record<string, string> = { 
-      INR: 'bg-blue-500', USD: 'bg-emerald-500', EUR: 'bg-violet-500', 
-      PKR: 'bg-amber-500', CNY: 'bg-red-500', SAR: 'bg-orange-500',
-      AED: 'bg-cyan-500', GBP: 'bg-indigo-500' 
+      INR: '#3b82f6', USD: '#10b981', EUR: '#8b5cf6', 
+      PKR: '#f59e0b', CNY: '#ef4444', SAR: '#f97316',
+      AED: '#06b6d4', GBP: '#6366f1' 
     };
     return Object.entries(map).map(([cur, val]) => ({
-      currency: cur,
+      label: cur,
       value: val,
       pct: Math.round((val / total) * 100),
-      color: colors[cur] ?? 'bg-gray-400',
+      color: colors[cur] ?? '#94a3b8',
     }));
   }, [sales]);
 
@@ -85,22 +89,15 @@ export default function Finance() {
     return Object.entries(map)
       .map(([id, data]) => ({ ...data, item: items.find(i => i.id === id)?.name ?? id }))
       .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 6);
+      .slice(0, 5);
   }, [sales, items]);
 
-  // Imports by country
-  const importsByCountry = useMemo(() => {
-    const map: Record<string, number> = {};
-    containers.forEach(c => { map[c.source_country] = (map[c.source_country] || 0) + c.converted_cost_INR; });
-    return Object.entries(map).sort(([, a], [, b]) => b - a);
-  }, [containers]);
-
-  // Monthly P&L (last 6 months)
+  // Monthly P&L
   const monthlyPnL = useMemo(() => {
     const now = new Date();
     const months = Array.from({ length: 6 }, (_, i) => {
       const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
-      return { label: format(d, 'MMM yy'), year: d.getFullYear(), month: d.getMonth() };
+      return { label: format(d, 'MMM'), year: d.getFullYear(), month: d.getMonth() };
     });
     return months.map(m => {
       const mSales = sales.filter(s => {
@@ -113,242 +110,197 @@ export default function Finance() {
     });
   }, [sales]);
 
-  const maxBar = Math.max(...monthlyPnL.map(m => m.revenue), 1);
+  const profitTrend = monthlyPnL.map(m => m.profit);
+  const revenueTrend = monthlyPnL.map(m => m.revenue);
+  const maxBar = Math.max(...revenueTrend, 1);
 
   return (
-    <div className="space-y-6 lg:space-y-10 animate-in fade-in duration-500">
+    <div className="space-y-8 animate-slide-up pb-10">
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight flex items-center gap-3">
-             <div className="p-2 sm:p-2.5 bg-primary/10 rounded-xl text-primary flex-shrink-0">
-               <DollarSign className="w-5 h-5 sm:w-6 sm:h-6" />
-            </div>
-            Financial Engine
-          </h1>
-          <p className="text-xs sm:text-sm text-gray-400 font-bold uppercase tracking-widest mt-2 ml-12 sm:ml-14 border-l-2 border-gray-100 pl-4 uppercase tracking-tighter">
-            Multi-node profit audit and capital rotation logic.
-          </p>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-primary">
+            <Activity className="w-3.5 h-3.5" />
+            Strategic Financials
+          </div>
+          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Financial Engine</h1>
+          <p className="text-sm text-gray-500 font-medium">Global capital distribution and profit realization logic.</p>
         </div>
-        <div className="flex items-center gap-3 ml-12 sm:ml-0 self-start sm:self-auto">
-          <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest hidden sm:block">Master Currency</label>
-          <select
+
+        <div className="flex items-center gap-4 bg-white p-2 rounded-[1.5rem] border border-gray-100 shadow-soft">
+           <div className="px-4 py-2">
+             <p className="text-[10px] font-bold text-gray-400 uppercase leading-none">Reporting In</p>
+             <p className="text-xs font-black text-primary mt-1">{displayCurrency} Central</p>
+           </div>
+           <select
             title="Display Currency"
             value={displayCurrency}
             onChange={e => setDisplayCurrency(e.target.value)}
-            className="input-field h-11 bg-white text-sm font-bold shadow-sm focus:ring-2 focus:ring-primary/20 outline-none min-w-[120px]"
+            className="h-10 px-4 bg-gray-50 rounded-xl text-sm font-black outline-none border-none focus:ring-2 focus:ring-primary/20"
           >
             {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
       </div>
 
-      {/* KPI Stats Grid */}
-      <div className="responsive-grid">
-        <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-50/50 p-6 flex flex-col justify-between">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Gross Inflow</p>
-          <div>
-            <p className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{fmt(stats.totalRevenue)}</p>
-            <div className="flex items-center gap-1.5 mt-2">
-              <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-600 font-black text-[9px] uppercase tracking-tighter">
-                {sales.length} Events
-              </span>
-              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Global Conversions</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-50/50 p-6 flex flex-col justify-between">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Capital Committed (COGS)</p>
-          <div>
-            <p className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{fmt(stats.totalCOGS)}</p>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2 uppercase tracking-tighter">Inventory Reversal Point</p>
-          </div>
-        </div>
-
-        <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-200/20 p-6 flex flex-col justify-between sm:col-span-2 lg:col-span-1">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Landed Net Profit</p>
-          <div>
-            <p className={clsx("text-3xl font-black tracking-tighter tabular-nums", stats.totalProfit >= 0 ? 'text-emerald-600' : 'text-red-500')}>
-              {fmt(stats.totalProfit)}
-            </p>
-            <div className="flex items-center gap-1.5 mt-2">
-              <div className={clsx("w-4 h-4 rounded-full flex items-center justify-center", stats.totalProfit >= 0 ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600")}>
-                {stats.totalProfit >= 0 ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />}
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="bg-white rounded-[2rem] p-7 border border-gray-100 shadow-soft group hover:shadow-premium transition-all">
+          <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-6">Gross Inflow</p>
+          <div className="flex items-end justify-between">
+            <div>
+              <h2 className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{fmt(stats.totalRevenue)}</h2>
+              <div className="flex items-center gap-1.5 mt-2">
+                <span className="px-1.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-600 font-black text-[9px] uppercase">Globalized</span>
+                <p className="text-xs text-gray-400 font-bold">{sales.length} Orders</p>
               </div>
-              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest text-primary">{stats.profitMargin.toFixed(1)}% Yield</p>
+            </div>
+            <Sparkline data={revenueTrend} color="#3b82f6" />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-[2rem] p-7 border border-gray-100 shadow-soft group hover:shadow-premium transition-all">
+          <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-6">Capital Flow (COGS)</p>
+          <div className="flex items-end justify-between">
+            <div>
+              <h2 className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{fmt(stats.totalCOGS)}</h2>
+              <div className="flex items-center gap-1.5 mt-2 text-gray-400">
+                <Package className="w-3.5 h-3.5" />
+                <p className="text-xs font-bold uppercase tracking-tight">Stock Reversal</p>
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-gray-50 flex items-center justify-center text-gray-300">
+               <TrendingDown className="w-5 h-5" />
             </div>
           </div>
         </div>
 
-        <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-50/50 p-6 flex flex-col justify-between hidden lg:flex">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Import Magnitude</p>
-          <div>
-            <p className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{fmt(stats.totalContainerCost)}</p>
-            <div className="flex items-center gap-1.5 mt-2">
-              <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-600 font-black text-[9px] uppercase tracking-tighter">
-                {containers.length} Nodes
-              </span>
-              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Global Intake Cost</p>
+        <div className="bg-white rounded-[2rem] p-7 border border-gray-100 shadow-soft group hover:shadow-premium transition-all">
+          <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-6">Net Yield</p>
+          <div className="flex items-end justify-between">
+            <div>
+              <h2 className={clsx("text-3xl font-black tracking-tighter tabular-nums", stats.totalProfit >= 0 ? 'text-emerald-500' : 'text-red-500')}>
+                {fmt(stats.totalProfit)}
+              </h2>
+              <div className="flex items-center gap-1.5 mt-2">
+                <div className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                   <ArrowUpRight className="w-3 h-3" />
+                </div>
+                <p className="text-xs font-black text-emerald-600">{stats.profitMargin.toFixed(1)}% Margin</p>
+              </div>
             </div>
+            <Sparkline data={profitTrend} color="#10b981" />
           </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-primary to-blue-600 rounded-[2rem] p-7 text-white shadow-xl shadow-blue-100">
+           <p className="text-[11px] font-black uppercase tracking-widest opacity-60 mb-6">Realizable Potential</p>
+           <div className="flex items-center gap-6">
+              <Gauge value={Math.round((stats.totalProfit / (stats.potentialProfit || 1)) * 100)} label="Realized" color="#fff" />
+              <div>
+                 <p className="text-[10px] font-black uppercase opacity-60">Pending Profit</p>
+                 <p className="text-xl font-black tabular-nums">{fmt(stats.potentialProfit)}</p>
+              </div>
+           </div>
         </div>
       </div>
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 lg:gap-8">
-        {/* Monthly P&L Chart */}
-        <div className="xl:col-span-2 bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-100/50 p-6 sm:p-8">
-          <div className="flex items-center justify-between mb-8">
-            <h2 className="text-base font-extrabold text-gray-900 flex items-center gap-2.5">
-               <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-               Operational Velocity (INR Normalized)
+      {/* Charts & Breakdown */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+        {/* Main Performance Chart */}
+        <div className="xl:col-span-8 bg-white rounded-[2.5rem] border border-gray-100 shadow-soft p-8">
+          <div className="flex items-center justify-between mb-10">
+            <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+               <div className="w-1.5 h-8 bg-primary rounded-full" />
+               Operational Velocity
             </h2>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-blue-100" /><span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Inflow</span></div>
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400" /><span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Net Profit</span></div>
+            <div className="flex items-center gap-6">
+               <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                  <span className="text-[10px] font-black uppercase text-gray-400">Revenue</span>
+               </div>
+               <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                  <span className="text-[10px] font-black uppercase text-gray-400">Net Profit</span>
+               </div>
             </div>
           </div>
-          
-          <div className="flex items-end gap-3 sm:gap-6 h-48 sm:h-64">
-            {monthlyPnL.map(m => {
-              const revH = (m.revenue / maxBar) * 100;
-              const profH = Math.max(2, (m.profit / maxBar) * 100);
-              return (
-                <div key={m.label} className="flex-1 flex flex-col items-center group relative h-full">
-                  <div className="w-full flex items-end gap-1 h-full pb-8">
-                    <div className="flex-1 bg-blue-50/50 rounded-t-lg transition-all group-hover:bg-blue-100 relative" style={{ height: `${revH}%` }}>
-                       <div className="absolute -top-7 left-1/2 -translate-x-1/2 text-[9px] font-black text-blue-600 bg-white shadow-sm border border-blue-50 px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                         {formatCurrency(m.revenue)}
+
+          <div className="flex items-end gap-6 h-64 sm:h-80">
+             {monthlyPnL.map(m => {
+               const revH = (m.revenue / maxBar) * 100;
+               const profH = Math.max(5, (m.profit / maxBar) * 100);
+               return (
+                 <div key={m.label} className="flex-1 flex flex-col items-center group relative h-full">
+                    <div className="w-full flex items-end gap-1.5 h-full pb-10">
+                       <div className="flex-1 bg-gray-50 rounded-t-2xl transition-all group-hover:bg-blue-50 relative h-full flex flex-col justify-end overflow-hidden">
+                          <div className="w-full bg-blue-500/20 rounded-t-2xl" style={{ height: `${revH}%` }} />
+                          <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-8 opacity-0 group-hover:opacity-100 transition-all font-black text-[10px] text-primary whitespace-nowrap bg-white px-2 py-1 rounded-lg shadow-sm border border-gray-100">
+                             {fmt(m.revenue)}
+                          </div>
+                       </div>
+                       <div className="flex-1 bg-emerald-500 rounded-t-2xl relative transition-all group-hover:brightness-110" style={{ height: `${profH}%` }}>
+                          <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-8 opacity-0 group-hover:opacity-100 transition-all font-black text-[10px] text-emerald-600 whitespace-nowrap bg-white px-2 py-1 rounded-lg shadow-sm border border-gray-100">
+                             {fmt(m.profit)}
+                          </div>
                        </div>
                     </div>
-                    <div className={clsx("flex-1 rounded-t-lg transition-all duration-500 hover:brightness-110", m.profit >= 0 ? 'bg-emerald-400' : 'bg-red-400')} style={{ height: `${profH}%` }} />
-                  </div>
-                  <p className="absolute bottom-0 text-[10px] font-black text-gray-400 uppercase tracking-widest">{m.label}</p>
-                </div>
-              );
-            })}
+                    <span className="absolute bottom-0 text-[10px] font-black text-gray-400 uppercase tracking-widest">{m.label}</span>
+                 </div>
+               );
+             })}
           </div>
         </div>
 
-        {/* Currency Mix Pie Chart Logic Repurposed for Modern Bar List */}
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-100/50 p-6 sm:p-8">
-          <h2 className="text-sm font-black text-gray-900 uppercase tracking-widest flex items-center justify-between mb-8">
-            Node Currency Mix
-            <PieChart className="w-4 h-4 text-gray-300" />
-          </h2>
-          {salesByCurrency.length === 0 ? (
-            <div className="py-20 text-center flex flex-col items-center">
-               <Activity className="w-10 h-10 text-gray-100 mb-4" />
-               <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">No terminal logs</p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {salesByCurrency.map(({ currency, value, pct, color }) => (
-                <div key={currency} className="group">
-                  <div className="flex justify-between text-[11px] mb-2 font-black uppercase tracking-widest">
-                    <span className="text-gray-700">{currency}</span>
-                    <span className="text-gray-400 group-hover:text-primary transition-colors">{pct}% · {fmt(value)}</span>
-                  </div>
-                  <div className="w-full bg-gray-50 rounded-full h-2 overflow-hidden border border-gray-100/50">
-                    <div className={clsx(color, "h-full rounded-full transition-all duration-1000 group-hover:opacity-80")} style={{ width: `${pct}%` }} />
-                  </div>
+        {/* Distribution Analytics */}
+        <div className="xl:col-span-4 space-y-8">
+           <div className="bg-white rounded-[2.5rem] border border-gray-100 shadow-soft p-8">
+              <h2 className="text-sm font-black text-gray-900 uppercase tracking-widest mb-8 flex items-center justify-between">
+                Regional Distribution
+                <Globe2 className="w-4 h-4 text-gray-300" />
+              </h2>
+              {salesByLocation.length === 0 ? (
+                <div className="py-10 text-center italic text-gray-400 text-xs uppercase font-bold">No Data Vectorized</div>
+              ) : (
+                <div className="flex flex-col items-center gap-8">
+                   <DonutChart items={salesByLocation} size={160} />
+                   <div className="w-full space-y-3">
+                      {salesByLocation.slice(0, 4).map(loc => (
+                        <div key={loc.label} className="flex items-center justify-between group">
+                           <div className="flex items-center gap-3">
+                              <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: loc.color }} />
+                              <span className="text-xs font-black text-gray-600 truncate max-w-[120px]">{loc.label}</span>
+                           </div>
+                           <span className="text-xs font-black text-gray-900">{fmt(loc.value)}</span>
+                        </div>
+                      ))}
+                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+              )}
+           </div>
 
-      {/* Detail Analysis Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 lg:gap-8">
-        {/* Top Movers */}
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-100/50 overflow-hidden">
-          <div className="px-8 py-5 border-b border-gray-50 bg-gray-50/30 flex items-center justify-between">
-            <h2 className="text-[11px] font-black text-gray-900 uppercase tracking-widest flex items-center gap-2">
-              <ShoppingCart className="w-4 h-4 text-primary" /> High-Velocity Objects
-            </h2>
-            <BarChart3 className="w-4 h-4 text-gray-300" />
-          </div>
-          {topItems.length === 0 ? (
-             <div className="py-20 text-center">
-               <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">No high velocity logs</p>
-             </div>
-          ) : (
-            <div className="divide-y divide-gray-50">
-              {topItems.map((item, i) => (
-                <div key={item.item} className="px-8 py-4 flex items-center justify-between group hover:bg-gray-50 transition-all">
-                  <div className="flex items-center gap-4">
-                    <div className="w-8 h-8 rounded-xl bg-gray-100 flex items-center justify-center text-[10px] font-black text-gray-400 group-hover:bg-primary group-hover:text-white transition-all">
-                      0{i + 1}
-                    </div>
-                    <div>
-                      <p className="text-sm font-extrabold text-gray-900 tracking-tight">{item.item}</p>
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">{item.qty} Object Units Sold</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-black text-gray-900 tabular-nums">{fmt(item.revenue)}</p>
-                    <p className={clsx("text-[10px] font-black tabular-nums mt-0.5", item.profit >= 0 ? "text-emerald-500" : "text-red-500")}>
-                      {item.profit >= 0 ? '+' : ''}{fmt(item.profit)} Yield
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Node Distribution */}
-        <div className="space-y-6 lg:grid lg:grid-cols-2 lg:gap-6 xl:flex xl:flex-col xl:space-y-6">
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-100/50 p-8">
-            <h2 className="text-[11px] font-black text-gray-900 uppercase tracking-widest flex items-center justify-between mb-8">
-              Anchor Node Performance
-              <Globe2 className="w-4 h-4 text-gray-300" />
-            </h2>
-            {salesByLocation.length === 0 ? (
-               <p className="text-center py-10 text-[10px] font-black text-gray-300 uppercase tracking-widest">No node data identified</p>
-            ) : (
+           <div className="bg-white rounded-[2.5rem] border border-gray-100 shadow-soft p-8">
+              <h2 className="text-sm font-black text-gray-900 uppercase tracking-widest mb-8 flex items-center justify-between">
+                Top Value Movers
+                <BarChart3 className="w-4 h-4 text-gray-300" />
+              </h2>
               <div className="space-y-6">
-                {salesByLocation.map(l => (
-                  <div key={l.location} className="flex items-center justify-between group">
-                    <div>
-                      <p className="text-[13px] font-black text-gray-800 tracking-tight group-hover:text-primary transition-colors">{l.location}</p>
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tight mt-0.5">{l.count} Transmission Events</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-black text-gray-900 tabular-nums">{fmt(l.revenue)}</p>
-                      <p className={clsx("text-[10px] font-black mt-0.5 tabular-nums", l.profit >= 0 ? 'text-emerald-500' : 'text-red-500')}>
-                        {l.profit >= 0 ? '+' : ''}{fmt(l.profit)} Net
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                 {topItems.map((item, i) => (
+                   <div key={item.item} className="flex items-start gap-4 group">
+                      <div className="w-8 h-8 rounded-xl bg-gray-50 flex items-center justify-center text-[10px] font-black text-gray-400 group-hover:bg-primary group-hover:text-white transition-all">
+                        0{i+1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                         <p className="text-sm font-black text-gray-800 truncate">{item.item}</p>
+                         <div className="flex justify-between items-center mt-1">
+                            <p className="text-[10px] text-gray-400 font-bold uppercase">{item.qty} Units</p>
+                            <p className="text-xs font-black text-emerald-500">+{fmt(item.profit)}</p>
+                         </div>
+                      </div>
+                   </div>
+                 ))}
               </div>
-            )}
-          </div>
-
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-100/50 p-8">
-            <h2 className="text-[11px] font-black text-gray-900 uppercase tracking-widest flex items-center justify-between mb-8">
-              Supply Vector Costing
-              <Package className="w-4 h-4 text-gray-300" />
-            </h2>
-            {importsByCountry.length === 0 ? (
-               <p className="text-center py-10 text-[10px] font-black text-gray-300 uppercase tracking-widest">No source vector data</p>
-            ) : (
-              <div className="space-y-5">
-                {importsByCountry.map(([country, value]) => (
-                  <div key={country} className="flex items-center justify-between group">
-                    <div className="flex items-center gap-3">
-                       <div className="w-6 h-6 rounded bg-gray-50 border border-gray-100 flex items-center justify-center text-[10px] font-black text-gray-400">#</div>
-                       <p className="text-[13px] font-black text-gray-800 tracking-tight group-hover:text-primary transition-colors">{country}</p>
-                    </div>
-                    <p className="text-sm font-black text-gray-900 tabular-nums">{fmt(value)}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+           </div>
         </div>
       </div>
     </div>

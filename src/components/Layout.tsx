@@ -16,22 +16,29 @@ import {
   Zap,
   Building2,
   FileText,
+  BarChart2,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '../store/authStore';
 import { useStore } from '../store';
 
 const navItems = [
-  { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-  { name: 'Warehouse', path: '/warehouse', icon: Warehouse },
-  { name: 'Shops', path: '/shops', icon: Store },
-  { name: 'Transfers', path: '/transfers', icon: ArrowRightLeft },
-  { name: 'Returns', path: '/returns', icon: Undo2 },
-  { name: 'Finance', path: '/finance', icon: PieChart },
-  { name: 'Reports', path: '/reports', icon: FileText },
-  { name: 'Manage Warehouses', path: '/manage-warehouses', icon: Building2 },
-  { name: 'Manage Shops', path: '/manage-shops', icon: Globe },
-  { name: 'Users', path: '/users', icon: Users },
+  { name: 'Command Center', path: '/dashboard', icon: LayoutDashboard, group: 'CORE' },
+  { name: 'Intelligence Matrix', path: '/insights', icon: Zap, group: 'ANALYTICS' },
+
+  { name: 'Warehouse Mgmt', path: '/warehouse', icon: Warehouse, group: 'OPERATIONS' },
+  { name: 'Manage Warehouses', path: '/manage-warehouses', icon: Building2, group: 'OPERATIONS' },
+  
+  { name: 'Logistics & Flow', path: '/transfers', icon: ArrowRightLeft, group: 'OPERATIONS' },
+  { name: 'Returns handling', path: '/returns', icon: Undo2, group: 'OPERATIONS' },
+  { name: 'Stock Reports', path: '/stock-reports', icon: BarChart2, group: 'OPERATIONS' },
+
+  { name: 'Sales & Shops', path: '/shops', icon: Store, group: 'FINANCE' },
+  { name: 'Finance Hub', path: '/finance', icon: PieChart, group: 'FINANCE' },
+  { name: 'Reports Archive', path: '/reports', icon: FileText, group: 'FINANCE' },
+
+  { name: 'Manage Shops', path: '/manage-shops', icon: Globe, group: 'ADMIN' },
+  { name: 'Control Users', path: '/users', icon: Users, group: 'ADMIN' },
 ];
 
 export default function Layout() {
@@ -91,28 +98,40 @@ export default function Layout() {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 py-5 px-3 space-y-0.5 overflow-y-auto">
-          {navItems.map((item) => {
-            const isActive = location.pathname.startsWith(item.path);
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.name}
-                to={item.path}
-                onClick={() => setIsMobileMenuOpen(false)}
-                className={clsx(
-                  "flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-all duration-150 group",
-                  isActive
-                    ? "bg-primary text-white shadow-sm shadow-primary/30"
-                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
-                )}
-              >
-                <Icon className={clsx("w-4.5 h-4.5 mr-3 flex-shrink-0", isActive ? "text-white" : "text-gray-400 group-hover:text-gray-600")} size={18} />
-                {item.name}
-                {isActive && <ChevronRight className="w-4 h-4 ml-auto text-white/60" />}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 py-5 px-3 space-y-4 overflow-y-auto">
+          {(() => {
+             const groups = ['CORE', 'ANALYTICS', 'OPERATIONS', 'FINANCE', 'ADMIN'];
+             return groups.map(group => {
+               const itemsInGroup = navItems.filter(i => (i as any).group === group);
+               if (itemsInGroup.length === 0) return null;
+               return (
+                 <div key={group} className="space-y-1">
+                   <p className="px-3 text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 font-sans">{group}</p>
+                   {itemsInGroup.map((item) => {
+                     const isActive = location.pathname.startsWith(item.path);
+                     const Icon = item.icon;
+                     return (
+                       <Link
+                         key={item.name}
+                         to={item.path}
+                         onClick={() => setIsMobileMenuOpen(false)}
+                         className={clsx(
+                           "flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-all duration-150 group/item",
+                           isActive
+                             ? "bg-primary text-white shadow-sm shadow-primary/30"
+                             : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                         )}
+                       >
+                         <Icon className={clsx("w-4 mr-3 flex-shrink-0", isActive ? "text-white" : "text-gray-400 group-hover/item:text-gray-600")} size={16} />
+                         <span className="truncate">{item.name}</span>
+                         {isActive && <ChevronRight className="w-3.5 h-3.5 ml-auto text-white/60" />}
+                       </Link>
+                     );
+                   })}
+                 </div>
+               );
+             });
+          })()}
         </nav>
 
         {/* User Footer */}
