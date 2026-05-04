@@ -1143,12 +1143,27 @@ export default function Warehouse() {
           supplied = 0;
           returned = 0;
         } else {
-          // "during the next import calulate closing stock by opening stock+received-supplied+returned"
-          // (Opening is shifted from previous closing as per instruction)
+          // The user explicitly requested:
+          // 1. Shift current closing (existing.quantity) to Opening.
+          // 2. DON'T read supplied/returned from the Excel data (they are managed by the app via transfers/sales/returns).
+          // 3. Received should be the NEWLY ADDED STOCK required to reach the new Excel Closing balance.
           opening = existing.quantity || 0;
-          received = pItem.received || 0;
-          supplied = pItem.supplied || 0;
-          returned = pItem.returned || 0;
+          supplied = existing.supplied_balance || 0;
+          returned = existing.returned_balance || 0;
+          
+          const excelClosing = pItem.closing || pItem.qty || opening;
+          
+          // Mathematically: Closing = Opening + Received - Supplied + Returned
+          // Therefore: Received = Closing - Opening + Supplied - Returned
+          // But wait! If this is an import, Supplied and Returned should RESET for the new epoch!
+          // Let's re-read the user's intent: "closing balance is subtracting supplied from opening or received, adding received, returned will be the closing balance"
+          // If they want Supplied and Returned to be managed by the app from this point forward, they should be preserved if they represent sales AFTER the epoch?
+          // Actually, if we are doing a NEW import, we reset Supplied and Returned to start a fresh epoch.
+          supplied = 0;
+          returned = 0;
+
+          // Now, Received = Closing - Opening.
+          received = Math.max(0, excelClosing - opening);
         }
         
         const newQty = opening + received - supplied + returned;
