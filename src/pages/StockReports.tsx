@@ -79,27 +79,14 @@ export default function StockReports() {
     let returned = 0;
     let closing = 0;
 
-    if (isToday) {
-      if (invEntry) {
-        // If the record is NOT yet rolled over for today, it might be stale.
-        // But our store logic handles rollover proactively.
-        opening = invEntry.opening_balance || 0;
-        received = invEntry.received_balance || 0;
-        supplied = invEntry.supplied_balance || 0;
-        returned = invEntry.returned_balance || 0;
-      } else {
-        opening = snapshotQty; // Fallback
-      }
-    } else {
-      // Historical: Calculate backwards from current state
-      // This is an estimate: Opening = Current - (Total Received since TargetDate) + (Total Supplied since TargetDate)
-      // For simplicity, we use the "backwards from today" logic:
-      opening = snapshotQty - txReceived + txSupplied - txReturned;
-      if (opening < 0) opening = 0;
-      received = txReceived;
-      supplied = txSupplied;
-      returned = txReturned;
-    }
+    // Use robust ledger math to determine Opening Balance to ensure stability intra-day
+    // Current Qty = Opening + Received - Supplied + Returned
+    // Therefore: Opening = Current Qty - Received + Supplied - Returned
+    opening = snapshotQty - txReceived + txSupplied - txReturned;
+    if (opening < 0) opening = 0;
+    received = txReceived;
+    supplied = txSupplied;
+    returned = txReturned;
 
     closing = opening + received - supplied + returned;
 
