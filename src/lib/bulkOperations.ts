@@ -993,14 +993,21 @@ export async function exportStockReport(data: {
       
       let opening = 0, received = 0, supplied = 0, returned = 0, closing = 0;
 
-      // Use robust ledger math to determine Opening Balance to ensure stability intra-day
-      // Current Qty = Opening + Received - Supplied + Returned
-      // Therefore: Opening = Current Qty - Received + Supplied - Returned
-      opening = Math.max(0, currentQty - txReceived + txSupplied - txReturned);
-      received = txReceived;
-      supplied = txSupplied;
-      returned = txReturned;
-      closing = opening + received - supplied + returned;
+      if (isToday) {
+        // Use state-machine fields stored in the inventory document
+        opening = storedOpening || 0;
+        received = storedReceived || 0;
+        supplied = storedSupplied || 0;
+        returned = storedReturned || 0;
+        closing = opening + received - supplied + returned;
+      } else {
+        // Historical logic
+        opening = Math.max(0, currentQty - txReceived + txSupplied - txReturned);
+        received = txReceived;
+        supplied = txSupplied;
+        returned = txReturned;
+        closing = opening + received - supplied + returned;
+      }
 
       itemMetrics.set(`${loc.id}_${item.id}`, { opening, received, supplied, returned, closing });
     });
