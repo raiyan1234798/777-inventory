@@ -22,7 +22,8 @@ export default function Shops() {
   const [saving, setSaving] = useState(false);
 
   const [saleLocation, setSaleLocation] = useState('');
-  const [saleItems, setSaleItems] = useState([{ item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
+  const [isSaleMinimized, setIsSaleMinimized] = useState(false);
+  const [saleItems, setSaleItems] = useState([{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
   
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
@@ -96,8 +97,9 @@ export default function Shops() {
         });
       }));
       setSaleModal(false);
+      setIsSaleMinimized(false);
       setSaleLocation('');
-      setSaleItems([{ item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
+      setSaleItems([{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -106,7 +108,7 @@ export default function Shops() {
   };
 
   const addSaleItemRow = () => {
-    setSaleItems([...saleItems, { item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
+    setSaleItems([...saleItems, { brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
   };
 
   const removeSaleItemRow = (index: number) => {
@@ -396,7 +398,17 @@ export default function Shops() {
         </div>
       </div>
 
-      <Modal isOpen={saleModal} onClose={() => setSaleModal(false)} title="Record a Sale" description="Enter the details of the item sold." size="md">
+      <Modal
+        isOpen={saleModal}
+        onClose={() => { setSaleModal(false); setIsSaleMinimized(false); }}
+        title="Record a Sale"
+        description="Enter the details of the item sold."
+        size="md"
+        minimized={isSaleMinimized}
+        onMinimize={() => setIsSaleMinimized(true)}
+        onRestore={() => setIsSaleMinimized(false)}
+        minimizeLabel={saleLocation ? `${shops.find(s => s.id === saleLocation)?.name ?? ''} · ${saleItems.filter(si => si.item_id).length} item(s)` : 'Selecting shop…'}
+      >
         <form onSubmit={handleRecordSale} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="md:col-span-2">
@@ -404,7 +416,7 @@ export default function Shops() {
               <select title="Select Shop Location" required className="input-field h-12 bg-white font-bold" value={saleLocation} 
                 onChange={e => {
                   setSaleLocation(e.target.value);
-                  setSaleItems([{ item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
+                  setSaleItems([{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
                 }}>
                 <option value="">Select a shop…</option>
                 {shops.map(s => <option key={s.id} value={s.id}>{s.name} ({s.country})</option>)}
@@ -423,6 +435,19 @@ export default function Shops() {
                 const availableQty = saleLocation && si.item_id
                   ? inventory.find(e => e.location_id === saleLocation && e.item_id === si.item_id)?.quantity ?? 0
                   : 0;
+
+                // Full label for selected item
+                const selectedItem = si.item_id ? items.find(i => i.id === si.item_id) : null;
+                const selectedBrand = selectedItem ? brands.find(b => b.id === selectedItem.brand_id) : null;
+                const selectedSku = selectedItem?.sku?.trim() || 'No SKU';
+
+                // Items available at the selected shop
+                const shopItems = saleLocation
+                  ? inventory
+                      .filter(e => e.location_id === saleLocation && e.quantity > 0)
+                      .map(e => ({ ...e, item: items.find(i => i.id === e.item_id) }))
+                      .filter(e => e.item)
+                  : [];
                 
                 return (
                   <div key={si._id} className="p-4 border border-gray-100 rounded-xl bg-gray-50/50 space-y-4">
@@ -434,26 +459,73 @@ export default function Shops() {
                         </button>
                       )}
                     </div>
-                    
-                    <div className="md:col-span-2">
-                      <select title="Select Item" required className="input-field h-12 bg-white font-bold w-full" 
-                        value={si.item_id} 
-                        onChange={e => {
-                          const item = items.find(i => i.id === e.target.value);
-                          const newRows = [...saleItems];
-                          newRows[index].item_id = e.target.value;
-                          newRows[index].selling_price = item?.retail_price || 0;
-                          setSaleItems(newRows);
-                        }}
-                        disabled={!saleLocation}>
-                        <option value="">Choose an item…</option>
-                        {inventory
-                          .filter(e => e.location_id === saleLocation && e.quantity > 0)
-                          .map(e => {
-                            const item = items.find(i => i.id === e.item_id);
-                            return item ? <option key={e.item_id} value={e.item_id}>{item.name} ({e.quantity} Available)</option> : null;
-                          })}
-                      </select>
+
+                    {/* Selected item full-name display */}
+                    {selectedItem && (
+                      <div className="bg-primary/5 border border-primary/10 rounded-lg px-3 py-2 flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-black text-gray-900 truncate">{selectedItem.name}</p>
+                          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
+                            SKU: {selectedSku} · {selectedBrand?.name ?? 'No Brand'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newRows = [...saleItems];
+                            newRows[index].item_id = '';
+                            setSaleItems(newRows);
+                          }}
+                          className="text-gray-300 hover:text-red-400 transition-colors flex-shrink-0"
+                          title="Clear selection"
+                        >
+                          <span className="text-xs font-black">✕</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Brand + Item row */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-1">
+                        <select title="Filter by Brand" className="input-field h-12 bg-white font-bold w-full"
+                          value={si.brand_id}
+                          onChange={e => {
+                            const newRows = [...saleItems];
+                            newRows[index].brand_id = e.target.value;
+                            newRows[index].item_id = '';
+                            setSaleItems(newRows);
+                          }}
+                          disabled={!saleLocation}>
+                          <option value="">All Brands</option>
+                          {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <select title="Select Item" required className="input-field h-12 bg-white font-bold w-full"
+                          value={si.item_id}
+                          onChange={e => {
+                            const item = items.find(i => i.id === e.target.value);
+                            const newRows = [...saleItems];
+                            newRows[index].item_id = e.target.value;
+                            newRows[index].selling_price = item?.retail_price || 0;
+                            setSaleItems(newRows);
+                          }}
+                          disabled={!saleLocation}>
+                          <option value="">Choose an item…</option>
+                          {shopItems
+                            .filter(e => !si.brand_id || e.item!.brand_id === si.brand_id)
+                            .sort((a, b) => a.item!.name.localeCompare(b.item!.name))
+                            .map(e => {
+                              const brand = brands.find(b => b.id === e.item!.brand_id);
+                              const sku = e.item!.sku?.trim() || 'No SKU';
+                              return (
+                                <option key={e.item_id} value={e.item_id}>
+                                  {e.item!.name} (SKU: {sku}) ({brand?.name ?? 'No Brand'}) — {e.quantity} Available
+                                </option>
+                              );
+                            })}
+                        </select>
+                      </div>
                     </div>
                     
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
@@ -510,7 +582,7 @@ export default function Shops() {
           )}
 
           <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t border-gray-100">
-            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => setSaleModal(false)}>Cancel</button>
+            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => { setSaleModal(false); setIsSaleMinimized(false); }}>Cancel</button>
             <button type="submit" className="btn-primary h-12 px-10 font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20" disabled={saving || saleItems.some(si => !si.item_id)}>
               {saving ? 'Processing...' : 'Complete Sale'}
             </button>

@@ -10,6 +10,7 @@ export default function Transfers() {
   const { locations, items, inventory, transactions, transfer, brands } = useStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -37,6 +38,16 @@ export default function Transfers() {
     if (id === 'customer') return 'Customer';
     return locations.find(l => l.id === id)?.name ?? id;
   };
+
+  // Build a label for the minimized pill — show how many items are selected
+  const minimizeLabel = (() => {
+    const fromName = form.from_location ? getLocationName(form.from_location) : null;
+    const toName = form.to_location ? getLocationName(form.to_location) : null;
+    const selectedCount = itemsToTransfer.filter(i => i.item_id).length;
+    if (!fromName) return 'Selecting source…';
+    const route = toName ? `${fromName} → ${toName}` : fromName;
+    return `${route} · ${selectedCount} item${selectedCount !== 1 ? 's' : ''} selected`;
+  })();
 
   const handleTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,6 +91,7 @@ export default function Transfers() {
         });
       }));
       setIsModalOpen(false);
+      setIsMinimized(false);
       setForm({ from_location: '', to_location: '' });
       setItemsToTransfer([{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }]);
     } catch (err: any) {
@@ -87,6 +99,12 @@ export default function Transfers() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleClose = () => {
+    setIsModalOpen(false);
+    setIsMinimized(false);
+    setError('');
   };
 
   const addItemRow = () => {
@@ -112,7 +130,7 @@ export default function Transfers() {
             Manage item transfers between shops.
           </p>
         </div>
-        <button onClick={() => { setIsModalOpen(true); setError(''); }} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-12 px-6 self-start sm:self-auto ml-12 sm:ml-0">
+        <button onClick={() => { setIsModalOpen(true); setIsMinimized(false); setError(''); }} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-12 px-6 self-start sm:self-auto ml-12 sm:ml-0">
           <Send className="w-4 h-4" /> 
           <span className="whitespace-nowrap font-black uppercase tracking-widest text-[10px]">Transfer Items</span>
         </button>
@@ -269,7 +287,17 @@ export default function Transfers() {
          </div>
        </div>
 
-      <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setError(''); }} title="Transfer Items" description="Transfer items between shops." size="md">
+      <Modal
+        isOpen={isModalOpen}
+        onClose={handleClose}
+        title="Transfer Items"
+        description="Transfer items between shops."
+        size="md"
+        minimized={isMinimized}
+        onMinimize={() => setIsMinimized(true)}
+        onRestore={() => setIsMinimized(false)}
+        minimizeLabel={minimizeLabel}
+      >
         <form onSubmit={handleTransfer} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
@@ -307,6 +335,11 @@ export default function Transfers() {
                   ? inventory.find(e => e.location_id === form.from_location && e.item_id === itemRow.item_id)
                   : null;
 
+                // Full label for the selected item
+                const selectedItem = itemRow.item_id ? items.find(i => i.id === itemRow.item_id) : null;
+                const selectedBrand = selectedItem ? brands.find(b => b.id === selectedItem.brand_id) : null;
+                const selectedSku = selectedItem?.sku?.trim() || 'No SKU';
+
                 return (
                   <div key={itemRow._id} className="p-4 border border-gray-100 rounded-xl bg-gray-50/50 space-y-4">
                     <div className="flex justify-between items-center mb-1">
@@ -317,6 +350,30 @@ export default function Transfers() {
                         </button>
                       )}
                     </div>
+
+                    {/* Selected item full-name display */}
+                    {selectedItem && (
+                      <div className="bg-primary/5 border border-primary/10 rounded-lg px-3 py-2 flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-black text-gray-900 truncate">{selectedItem.name}</p>
+                          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
+                            SKU: {selectedSku} · {selectedBrand?.name ?? 'No Brand'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newItems = [...itemsToTransfer];
+                            newItems[index].item_id = '';
+                            setItemsToTransfer(newItems);
+                          }}
+                          className="text-gray-300 hover:text-red-400 transition-colors flex-shrink-0"
+                          title="Clear selection"
+                        >
+                          <span className="text-xs font-black">✕</span>
+                        </button>
+                      </div>
+                    )}
                     
                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                       <div className="sm:col-span-1">
@@ -394,7 +451,7 @@ export default function Transfers() {
           )}
 
           <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t border-gray-100">
-            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => { setIsModalOpen(false); setError(''); }}>Cancel</button>
+            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={handleClose}>Cancel</button>
             <button type="submit" className="btn-primary h-12 px-10 font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20" disabled={saving || itemsToTransfer.some(i => !i.item_id) || itemsToTransfer.some(i => !i.quantity)}>
               {saving ? 'Transferring…' : 'Transfer'}
             </button>
