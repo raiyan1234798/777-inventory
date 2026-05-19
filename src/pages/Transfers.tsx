@@ -348,9 +348,10 @@ export default function Transfers() {
                             .sort((a, b) => a.item!.name.localeCompare(b.item!.name))
                             .map(e => {
                             const brand = brands.find(b => b.id === e.item!.brand_id);
+                            const sku = e.item!.sku?.trim() || 'No SKU';
                             return (
                               <option key={e.item_id} value={e.item_id}>
-                                {e.item!.name} (SKU: {e.item!.sku}) ({brand?.name ?? 'No Brand'}) — {e.quantity} Available (avg {formatCurrency(e.avg_cost_INR)})
+                                {e.item!.name} (SKU: {sku}) ({brand?.name ?? 'No Brand'}) — {e.quantity} Available (avg {formatCurrency(e.avg_cost_INR)})
                               </option>
                             );
                           })}
