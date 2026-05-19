@@ -90,11 +90,13 @@ export default function ManageShops() {
     try {
       await addExpense({
         ...expForm,
-        location_type: 'shop', // FIX: Explicitly set location_type for proper categorization
+        location_type: 'shop',
         converted_amount_INR: toINR(expForm.amount, expForm.currency)
       });
       setIsExpModal(false);
       setExpForm({ ...expForm, amount: 0, notes: '' });
+    } catch (err: any) {
+      alert('Failed to log expense: ' + err.message);
     } finally {
       setSaving(false);
     }
@@ -189,7 +191,14 @@ export default function ManageShops() {
                     </button>
                     <button 
                       title="Delete Shop"
-                      onClick={() => deleteLocation(shop.id)} 
+                      onClick={async () => {
+                        if (!window.confirm(`Delete shop "${shop.name}"? This cannot be undone.`)) return;
+                        try {
+                          await deleteLocation(shop.id);
+                        } catch (err: any) {
+                          alert(err.message);
+                        }
+                      }} 
                       className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -251,9 +260,9 @@ export default function ManageShops() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50 bg-white">
-                {expenses.map(e => (
+                {expenses.filter(e => e.location_type === 'shop' || shops.some(s => s.id === e.location_id)).map(e => (
                   <tr key={e.id} className="hover:bg-gray-50/50 transition-colors group">
-                    <td className="px-6 py-4 font-semibold text-gray-900">{shops.find(s => s.id === e.location_id)?.name}</td>
+                    <td className="px-6 py-4 font-semibold text-gray-900">{shops.find(s => s.id === e.location_id)?.name ?? 'Unknown Shop'}</td>
                     <td className="px-6 py-4">
                       <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-medium">{e.category}</span>
                     </td>
@@ -263,12 +272,14 @@ export default function ManageShops() {
                     </td>
                     <td className="px-6 py-4 text-gray-500 text-[11px]">{format(new Date(e.date), 'MMM dd, yyyy')}</td>
                     <td className="px-6 py-4 text-right">
-                      <button title="Delete Expense" onClick={() => deleteExpense(e.id)} className="p-2 text-gray-400 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                      <button title="Delete Expense" onClick={() => {
+                        if (window.confirm('Delete this expense?')) deleteExpense(e.id);
+                      }} className="p-2 text-gray-400 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
                     </td>
                   </tr>
                 ))}
-                {expenses.length === 0 && (
-                  <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400">No expenses recorded.</td></tr>
+                {expenses.filter(e => e.location_type === 'shop' || shops.some(s => s.id === e.location_id)).length === 0 && (
+                  <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400">No shop expenses recorded.</td></tr>
                 )}
               </tbody>
             </table>

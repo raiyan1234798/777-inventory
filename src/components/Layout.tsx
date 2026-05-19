@@ -23,13 +23,13 @@ import { useAuthStore } from '../store/authStore';
 import { useStore } from '../store';
 
 const navItems = [
-  { name: 'Command Center', path: '/dashboard', icon: LayoutDashboard, group: 'CORE' },
-  { name: 'Intelligence Matrix', path: '/insights', icon: Zap, group: 'ANALYTICS' },
+  { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, group: 'CORE' },
+  { name: 'Analytics', path: '/insights', icon: Zap, group: 'ANALYTICS' },
 
   { name: 'Warehouse Mgmt', path: '/warehouse', icon: Warehouse, group: 'OPERATIONS' },
   { name: 'Manage Warehouses', path: '/manage-warehouses', icon: Building2, group: 'OPERATIONS' },
   
-  { name: 'Logistics & Flow', path: '/transfers', icon: ArrowRightLeft, group: 'OPERATIONS' },
+  { name: 'Stock Transfer', path: '/transfers', icon: ArrowRightLeft, group: 'OPERATIONS' },
   { name: 'Returns handling', path: '/returns', icon: Undo2, group: 'OPERATIONS' },
   { name: 'Stock Reports', path: '/stock-reports', icon: BarChart2, group: 'OPERATIONS' },
 

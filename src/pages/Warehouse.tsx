@@ -6,7 +6,7 @@ import {
   PackagePlus, Boxes, Search, Trash2, Plus,
   Truck, Tag, Globe2, Package, Store, Upload, FileText, X, AlertTriangle,
   Pencil, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight,
-  Warehouse as WarehouseIcon, Filter, BarChart3, TrendingUp, ArrowUpDown
+  Warehouse as WarehouseIcon, Filter, BarChart3, TrendingUp, ArrowUpDown, Settings, MapPin
 } from 'lucide-react';
 import clsx from 'clsx';
 import { db } from '../lib/firebase';
@@ -81,7 +81,9 @@ export default function Warehouse() {
   const {
     locations, brands, items, inventory, containers, transactions,
     addLocation, deleteLocation, addBrand, deleteBrand, deleteItem, updateItem,
-    addContainer, batchStockEntry, transfer, deleteStockEntry, deleteStockEntries
+    addContainer, batchStockEntry, transfer, deleteStockEntry, deleteStockEntries,
+    deleteItems, deleteContainers, deleteLocations, deleteBrands,
+    clearMasterData, clearHistory, clearLocationStock
   } = useStore();
 
   const warehouses = locations.filter(l => l.type === 'warehouse');
@@ -94,6 +96,11 @@ export default function Warehouse() {
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(new Set());
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [selectedContainerIds, setSelectedContainerIds] = useState<Set<string>>(new Set());
+  const [selectedLocationIds, setSelectedLocationIds] = useState<Set<string>>(new Set());
+  const [selectedBrandIds, setSelectedBrandIds] = useState<Set<string>>(new Set());
+  const [selectedPurgeLocation, setSelectedPurgeLocation] = useState('');
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>('name');
@@ -118,7 +125,7 @@ export default function Warehouse() {
   const [onboardModal, setOnboardModal] = useState(false);
   const [importExcelModal, setImportExcelModal] = useState(false);
   const [addStockModal, setAddStockModal] = useState(false);
-  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{ isOpen: boolean; id?: string; name?: string; isBulk: boolean }>({
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{ isOpen: boolean; id?: string; name?: string; isBulk: boolean; tab?: ActiveTab }>({
     isOpen: false, isBulk: false
   });
   const [activeStep, setActiveStep] = useState(1);
@@ -127,13 +134,13 @@ export default function Warehouse() {
     // existing item mode
     item_id: '', location_id: '', quantity: 1, unit_cost: 0, currency: 'INR',
     // new item mode
-    brand_id: '', brand_manual: '', item_name: '', category: '', sku: '', retail_price: 0, min_stock_limit: 10,
+    brand_id: '', brand_manual: '', item_name: '', category: '', sku: '', retail_price: 0, min_stock_limit: 0,
   });
   const [addStockManualBrand, setAddStockManualBrand] = useState(false);
 
   const [locationForm, setLocationForm] = useState({ name: '', type: 'warehouse' as 'warehouse' | 'shop', country: 'India', currency: 'INR' });
   const [brandForm, setBrandForm] = useState({ name: '', origin_country: 'India' });
-  const [itemForm, setItemForm] = useState({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 10, avg_cost_INR: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' });
+  const [itemForm, setItemForm] = useState({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 0, avg_cost_INR: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' });
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [isManualBrand, setIsManualBrand] = useState(false);
   const [importPreview, setImportPreview] = useState<any[]>([]);
@@ -195,7 +202,7 @@ export default function Warehouse() {
       quantity: 1, 
       unit_cost: 0, 
       retail_price: 0,
-      min_stock_limit: 10,
+      min_stock_limit: 0,
       matched_item_id: '' 
     }]
   });
@@ -216,7 +223,7 @@ export default function Warehouse() {
         const loc = locationMap.get(entry.location_id);
         const brand = item ? brandMap.get(item.brand_id) : undefined;
         if (!item || !loc) return null;
-        const minLimit = item.min_stock_limit ?? 10;
+        const minLimit = item.min_stock_limit ?? 0;
         const isOut = entry.quantity === 0;
         const isLow = !isOut && entry.quantity < minLimit;
         const stockPct = minLimit > 0 ? Math.min((entry.quantity / minLimit) * 100, 200) : 100;
@@ -307,32 +314,84 @@ export default function Warehouse() {
   // Active filter count
   const activeFilterCount = [filterBrand, filterStockStatus].filter(Boolean).length;
 
-  const toggleAllSelection = () => {
-    if (selectedInventoryIds.size === inventoryRows.length) {
-      setSelectedInventoryIds(new Set());
-    } else {
-      setSelectedInventoryIds(new Set(inventoryRows.map(r => r.id)));
-    }
-  };
-
-  const toggleRowSelection = (id: string) => {
+  const toggleInventoryAll = () => {
+    const ids = paginatedRows.map(r => r.id);
+    const allSelected = ids.length > 0 && ids.every(id => selectedInventoryIds.has(id));
     const next = new Set(selectedInventoryIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    if (allSelected) ids.forEach(id => next.delete(id));
+    else ids.forEach(id => next.add(id));
     setSelectedInventoryIds(next);
   };
 
+  const toggleItemAll = () => {
+    const ids = paginatedItems.map(r => r.id);
+    const allSelected = ids.length > 0 && ids.every(id => selectedItemIds.has(id));
+    const next = new Set(selectedItemIds);
+    if (allSelected) ids.forEach(id => next.delete(id));
+    else ids.forEach(id => next.add(id));
+    setSelectedItemIds(next);
+  };
+
+  const toggleContainerAll = () => {
+    const ids = containers.map(r => r.id);
+    const allSelected = ids.length > 0 && ids.every(id => selectedContainerIds.has(id));
+    const next = new Set(selectedContainerIds);
+    if (allSelected) ids.forEach(id => next.delete(id));
+    else ids.forEach(id => next.add(id));
+    setSelectedContainerIds(next);
+  };
+
+  const toggleLocationAll = () => {
+    const ids = paginatedLocations.map(r => r.id);
+    const allSelected = ids.length > 0 && ids.every(id => selectedLocationIds.has(id));
+    const next = new Set(selectedLocationIds);
+    if (allSelected) ids.forEach(id => next.delete(id));
+    else ids.forEach(id => next.add(id));
+    setSelectedLocationIds(next);
+  };
+
+  const toggleBrandAll = () => {
+    const ids = paginatedBrands.map(r => r.id);
+    const allSelected = ids.length > 0 && ids.every(id => selectedBrandIds.has(id));
+    const next = new Set(selectedBrandIds);
+    if (allSelected) ids.forEach(id => next.delete(id));
+    else ids.forEach(id => next.add(id));
+    setSelectedBrandIds(next);
+  };
+
+  const toggleSelect = (set: Set<string>, setter: (s: Set<string>) => void, id: string) => {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setter(next);
+  };
+
   const handleBulkDelete = async () => {
-    setDeleteConfirmModal({ isOpen: true, isBulk: true, name: `${selectedInventoryIds.size} items` });
+    setDeleteConfirmModal({ isOpen: true, isBulk: true, name: `selected ${activeTab}`, tab: activeTab });
   };
 
   const executeBulkDelete = async () => {
+    const { tab } = deleteConfirmModal;
     setSaving(true);
     setDeleteConfirmModal(f => ({ ...f, isOpen: false }));
     try {
-      await deleteStockEntries(Array.from(selectedInventoryIds));
-      alert(`Successfully deleted selection from stock.`);
-      setSelectedInventoryIds(new Set());
+      if (tab === 'inventory') {
+        await deleteStockEntries(Array.from(selectedInventoryIds));
+        setSelectedInventoryIds(new Set());
+      } else if (tab === 'items') {
+        await deleteItems(Array.from(selectedItemIds));
+        setSelectedItemIds(new Set());
+      } else if (tab === 'containers') {
+        await deleteContainers(Array.from(selectedContainerIds));
+        setSelectedContainerIds(new Set());
+      } else if (tab === 'locations') {
+        await deleteLocations(Array.from(selectedLocationIds));
+        setSelectedLocationIds(new Set());
+      } else if (tab === 'brands') {
+        await deleteBrands(Array.from(selectedBrandIds));
+        setSelectedBrandIds(new Set());
+      }
+      alert(`Successfully deleted selection.`);
     } catch (err: any) {
       alert("Bulk delete failed: " + err.message);
     } finally {
@@ -515,7 +574,7 @@ export default function Warehouse() {
       setItemModal(false);
       setEditingItemId(null);
       setIsManualBrand(false);
-      setItemForm({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 10, avg_cost_INR: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' });
+      setItemForm({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 0, avg_cost_INR: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' });
     } catch (err: any) {
       console.error("[Warehouse] Error saving item:", err);
       alert("Failed to save item: " + err.message);
@@ -557,14 +616,14 @@ export default function Warehouse() {
              sku: row.sku || `SKU-${Date.now().toString().slice(-6)}`,
              category: row.category || 'General',
              retail_price: row.retail_price,
-             min_stock_limit: row.min_stock_limit || 10
+             min_stock_limit: row.min_stock_limit || 0
            });
            row.matched_item_id = itemId;
         } else {
            // Update existing item's retail_price and min_stock_limit if provided
            const updates: Partial<any> = {};
            if (row.retail_price) updates.retail_price = row.retail_price;
-           if (row.min_stock_limit && row.min_stock_limit !== 10) updates.min_stock_limit = row.min_stock_limit;
+           if (row.min_stock_limit && row.min_stock_limit !== 0) updates.min_stock_limit = row.min_stock_limit;
            if (Object.keys(updates).length > 0) {
               await updateItem(row.matched_item_id, updates);
            }
@@ -590,7 +649,7 @@ export default function Warehouse() {
       setOnboardForm({
         container_no: '', source_country: 'China', total_cost: 0, currency: 'CNY', location_id: '',
         date: new Date().toISOString().split('T')[0], notes: '',
-        rows: [{ brand_name: '', item_name: '', sku: '', category: '', quantity: 1, unit_cost: 0, retail_price: 0, min_stock_limit: 10, matched_item_id: '' }]
+        rows: [{ brand_name: '', item_name: '', sku: '', category: '', quantity: 1, unit_cost: 0, retail_price: 0, min_stock_limit: 0, matched_item_id: '' }]
       });
     } catch (err: any) {
       alert(err.message);
@@ -623,7 +682,7 @@ export default function Warehouse() {
   };
 
   const resetAddStockForm = () => {
-    setAddStockForm({ item_id: '', location_id: '', quantity: 1, unit_cost: 0, currency: 'INR', brand_id: '', brand_manual: '', item_name: '', category: '', sku: '', retail_price: 0, min_stock_limit: 10 });
+    setAddStockForm({ item_id: '', location_id: '', quantity: 1, unit_cost: 0, currency: 'INR', brand_id: '', brand_manual: '', item_name: '', category: '', sku: '', retail_price: 0, min_stock_limit: 0 });
     setAddStockManualBrand(false);
     setAddStockMode('existing');
   };
@@ -655,7 +714,7 @@ export default function Warehouse() {
           sku: addStockForm.sku || `SKU-${Date.now().toString().slice(-6)}`,
           category: addStockForm.category || 'General',
           retail_price: addStockForm.retail_price || 0,
-          min_stock_limit: addStockForm.min_stock_limit || 10,
+          min_stock_limit: addStockForm.min_stock_limit || 0,
         });
       } else {
         const item = items.find(i => i.id === itemId);
@@ -790,7 +849,7 @@ export default function Warehouse() {
 
       results.push({
         name: itemName, qty: Math.max(qty, 0),
-        unitCost: 0, retailPrice: 0, minStockLimit: 10,
+        unitCost: 0, retailPrice: 0, minStockLimit: 0,
         sku: code || `SKU-${Math.floor(Math.random() * 1000000)}`,
         category: brandName || 'Imported',
         brandName,
@@ -955,7 +1014,7 @@ export default function Warehouse() {
             }
 
             parsedItems = Object.entries(itemBalances).map(([name, qty]) => ({
-              name, qty, unitCost: 0, retailPrice: 0, minStockLimit: 10,
+              name, qty, unitCost: 0, retailPrice: 0, minStockLimit: 0,
               sku: `SKU-${Math.floor(Math.random() * 1000000)}`, category: 'Ledger Import'
             }));
           } else {
@@ -992,7 +1051,7 @@ export default function Warehouse() {
 
               parsedItems.push({
                 name: pName, qty: pQty,
-                unitCost: 0, retailPrice: 0, minStockLimit: 10,
+                unitCost: 0, retailPrice: 0, minStockLimit: 0,
                 sku: `SKU-${Date.now().toString().slice(-6)}-${i}`, category: 'List Import'
               });
             }
@@ -1029,7 +1088,7 @@ export default function Warehouse() {
 
       // ── O(1) lookups ──────────────────────────────────────────────────────
       const localItemsMap = new Map<string, any>();
-      items.forEach(it => localItemsMap.set(it.name.toLowerCase().trim(), it));
+      items.forEach(it => localItemsMap.set(`${it.brand_id}_${it.name.toLowerCase().trim()}`, it));
       const localBrandsMap = new Map<string, any>();
       brands.forEach(b => localBrandsMap.set(b.name.trim().toUpperCase(), b));
 
@@ -1061,8 +1120,6 @@ export default function Warehouse() {
       const nowStr = new Date().toISOString();
 
       for (const pItem of importPreview) {
-        let item = localItemsMap.get(pItem.name.toLowerCase().trim());
-        let itemId = item?.id;
         const incomingCostINR = toINR(pItem.unitCost, importCurrency);
 
         // ── Brand resolution (no await) ──────────────────────────────────────
@@ -1086,6 +1143,9 @@ export default function Warehouse() {
         }
 
         // ── Item resolution (no await) ────────────────────────────────────────
+        let item = localItemsMap.get(`${brandId}_${pItem.name.toLowerCase().trim()}`);
+        let itemId = item?.id;
+
         if (!itemId) {
           const iRef = doc(collection(db, 'items'));
           itemId = iRef.id;
@@ -1093,7 +1153,7 @@ export default function Warehouse() {
             id: itemId, brand_id: brandId || brands[0]?.id || 'imported', name: pItem.name,
             sku: pItem.sku || `SKU-${Date.now().toString().slice(-6)}`,
             category: pItem.category || 'Imported',
-            min_stock_limit: pItem.minStockLimit || 10,
+            min_stock_limit: pItem.minStockLimit || 0,
             retail_price: pItem.retailPrice || 0,
             avg_cost_INR: incomingCostINR
           };
@@ -1104,7 +1164,7 @@ export default function Warehouse() {
           }
           masterBatch.set(iRef, newItem);
           masterOpCount++;
-          localItemsMap.set(pItem.name.toLowerCase().trim(), newItem);
+          localItemsMap.set(`${brandId}_${pItem.name.toLowerCase().trim()}`, newItem);
           newItemsCreated++;
         } else {
           const updateData: any = {};
@@ -1223,8 +1283,8 @@ export default function Warehouse() {
     { key: 'containers', label: 'Containers', icon: Truck },
     { key: 'items', label: 'Items', icon: Package },
     { key: 'brands', label: 'Brands', icon: Tag },
-    { key: 'locations', label: 'Locations', icon: Globe2 },
-    { key: 'settings', label: 'Settings', icon: Globe2 },
+    { key: 'locations', label: 'Locations', icon: MapPin },
+    { key: 'settings', label: 'Settings', icon: Settings },
   ];
 
   return (
@@ -1573,7 +1633,7 @@ export default function Warehouse() {
                         title="Select All"
                         className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
                         checked={paginatedRows.length > 0 && paginatedRows.every(r => selectedInventoryIds.has(r.id))}
-                        onChange={toggleAllSelection}
+                        onChange={toggleInventoryAll}
                       />
                     </th>
                     <th className="px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-700 transition-colors" onClick={() => toggleSort('name')}>
@@ -1640,7 +1700,7 @@ export default function Warehouse() {
                           title="Select Item"
                           className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
                           checked={selectedInventoryIds.has(r.id)}
-                          onChange={() => toggleRowSelection(r.id)}
+                          onChange={() => toggleSelect(selectedInventoryIds, setSelectedInventoryIds, r.id)}
                         />
                       </td>
                       <td className="px-4 py-3">
@@ -1769,7 +1829,7 @@ export default function Warehouse() {
                             title="Select Item"
                             className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer mt-1"
                             checked={selectedInventoryIds.has(r.id)}
-                            onChange={() => toggleRowSelection(r.id)}
+                            onChange={() => toggleSelect(selectedInventoryIds, setSelectedInventoryIds, r.id)}
                           />
                           <div className="min-w-0">
                             <h3 className="font-bold text-gray-900 text-sm truncate">{r.item.name}</h3>
@@ -1944,22 +2004,59 @@ export default function Warehouse() {
         {/* ── Containers Tab ── */}
         {activeTab === 'containers' && (
           <div>
+            <div className="p-4 sm:p-5 flex flex-col sm:flex-row gap-3 border-b border-gray-50">
+              <div className="relative flex-1">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input placeholder="Search containers..." className="input-field pl-10 h-11" disabled />
+              </div>
+              <button onClick={() => setOnboardModal(true)} className="btn-primary flex items-center gap-2 text-sm h-11">
+                <Plus className="w-4 h-4" /> Onboard Container
+              </button>
+              {selectedContainerIds.size > 0 && (
+                <button
+                  onClick={handleBulkDelete}
+                  className="btn-secondary text-red-600 border-red-100 bg-red-50 hover:bg-red-100 flex items-center gap-2 h-11 px-6 animate-in fade-in zoom-in duration-200"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete ({selectedContainerIds.size})
+                </button>
+              )}
+            </div>
+
             {/* Desktop Table View */}
             <div className="hidden lg:block overflow-x-auto">
               <table className="w-full text-sm text-left min-w-[600px]">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                   <tr>
+                    <th className="px-5 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        title="Select All"
+                        className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                        checked={containers.length > 0 && containers.every(c => selectedContainerIds.has(c.id))}
+                        onChange={toggleContainerAll}
+                      />
+                    </th>
                     <th className="px-5 py-3 font-medium">Source Country</th>
                     <th className="px-5 py-3 font-medium">Date</th>
                     <th className="px-5 py-3 font-medium text-right">Total Cost</th>
                     <th className="px-5 py-3 font-medium">Packing List (Logged)</th>
+                    <th className="px-5 py-3 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50 bg-white">
                   {containers.length === 0 ? (
-                    <tr><td colSpan={4} className="px-5 py-12 text-center text-gray-400 text-sm">No containers logged yet. Use "Onboard Container" to start.</td></tr>
+                    <tr><td colSpan={6} className="px-5 py-12 text-center text-gray-400 text-sm">No containers logged yet. Use "Onboard Container" to start.</td></tr>
                   ) : containers.map(c => (
-                    <tr key={c.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0">
+                    <tr key={c.id} className={clsx("hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0", selectedContainerIds.has(c.id) && 'bg-primary/5')}>
+                      <td className="px-5 py-3.5">
+                        <input
+                          type="checkbox"
+                          className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                          checked={selectedContainerIds.has(c.id)}
+                          onChange={() => toggleSelect(selectedContainerIds, setSelectedContainerIds, c.id)}
+                        />
+                      </td>
                       <td className="px-5 py-3.5 align-top">
                         <div className="font-medium text-gray-900">{c.source_country}</div>
                         <div className="text-[10px] text-primary mt-1 uppercase font-extrabold tracking-wider">#{c.container_no || c.id.slice(-6)}</div>
@@ -1969,7 +2066,6 @@ export default function Warehouse() {
                       <td className="px-5 py-3.5 align-top">
                         <div className="text-gray-400 text-[11px] mb-2 italic line-clamp-1" title={c.notes}>{c.notes || 'No container notes'}</div>
                         <div className="flex flex-wrap gap-1.5 min-h-[20px]">
-                          {/* Linked Items Visualization */}
                           {transactions.filter(t => t.container_id === c.id).length > 0 ? (
                              transactions.filter(t => t.container_id === c.id).map((t: any) => (
                                <span key={t.id} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 whitespace-nowrap">
@@ -1980,6 +2076,9 @@ export default function Warehouse() {
                             <span className="text-[10px] text-gray-300">No stock entry linked yet</span>
                           )}
                         </div>
+                      </td>
+                      <td className="px-5 py-3.5 text-right">
+                        <button title="Delete Container" onClick={() => { setDeleteConfirmModal({ isOpen: true, isBulk: false, id: c.id, name: `Container #${c.container_no}`, tab: 'containers' }); }} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                       </td>
                     </tr>
                   ))}
@@ -1995,13 +2094,22 @@ export default function Warehouse() {
                 </div>
               ) : (
                 <div className="space-y-4">
+                  <div className="flex items-center justify-between px-1 mb-2">
+                    <label className="flex items-center gap-2 text-xs font-bold text-gray-500 cursor-pointer">
+                      <input type="checkbox" className="rounded" checked={containers.length > 0 && containers.every(c => selectedContainerIds.has(c.id))} onChange={toggleContainerAll} />
+                      Select All Containers
+                    </label>
+                  </div>
                   {containers.map(c => (
-                    <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
+                    <div key={c.id} className={clsx("bg-white rounded-xl border p-4 shadow-sm hover:shadow-md transition-all", selectedContainerIds.has(c.id) ? 'border-primary bg-primary/5' : 'border-gray-200')}>
                       {/* Header */}
                       <div className="flex justify-between items-start mb-3 gap-2">
-                        <div>
-                          <p className="text-sm font-bold text-gray-900">{c.source_country}</p>
-                          <p className="text-[10px] text-primary uppercase font-extrabold tracking-wider mt-1">Container #{c.container_no || c.id.slice(-6)}</p>
+                        <div className="flex items-start gap-3">
+                          <input type="checkbox" className="rounded mt-1" checked={selectedContainerIds.has(c.id)} onChange={() => toggleSelect(selectedContainerIds, setSelectedContainerIds, c.id)} />
+                          <div>
+                            <p className="text-sm font-bold text-gray-900">{c.source_country}</p>
+                            <p className="text-[10px] text-primary uppercase font-extrabold tracking-wider mt-1">Container #{c.container_no || c.id.slice(-6)}</p>
+                          </div>
                         </div>
                         <div className="text-right">
                           <p className="text-xs text-gray-500">{new Date(c.date).toLocaleDateString('en-IN')}</p>
@@ -2014,28 +2122,11 @@ export default function Warehouse() {
                         <p className="text-sm font-bold text-blue-900 mt-1">{formatDualCurrency(c.total_cost, c.currency)}</p>
                       </div>
 
-                      {/* Notes */}
-                      {c.notes && (
-                        <div className="bg-gray-50 border border-gray-100 rounded-lg p-3 mb-3">
-                          <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider mb-1">Notes</p>
-                          <p className="text-xs text-gray-700">{c.notes}</p>
-                        </div>
-                      )}
-
-                      {/* Linked items */}
-                      <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
-                        <p className="text-[9px] uppercase font-bold text-gray-600 tracking-wider mb-2">Packing List</p>
-                        <div className="flex flex-wrap gap-1.5 min-h-[20px]">
-                          {transactions.filter(t => t.container_id === c.id).length > 0 ? (
-                            transactions.filter(t => t.container_id === c.id).map((t: any) => (
-                              <span key={t.id} className="inline-flex items-center px-2 py-1 rounded text-[10px] font-medium bg-blue-100 text-blue-700 border border-blue-200">
-                                {t.item_name} × {t.quantity}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-[10px] text-gray-400">No stock entry linked yet</span>
-                          )}
-                        </div>
+                      {/* Actions */}
+                      <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
+                        <button onClick={() => { setDeleteConfirmModal({ isOpen: true, isBulk: false, id: c.id, name: `Container #${c.container_no}`, tab: 'containers' }); }} className="text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5">
+                          <Trash2 className="w-3.5 h-3.5" /> Delete
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -2049,14 +2140,23 @@ export default function Warehouse() {
         {activeTab === 'items' && (
           <div>
             <div className="p-4 flex flex-col sm:flex-row gap-3 justify-between border-b border-gray-50">
-              <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input value={itemsSearch} onChange={e => { setItemsSearch(e.target.value); setItemsPage(1); }}
-                  placeholder="Search items by name, SKU, category, brand..." className="input-field pl-10 h-10 text-sm" />
+              <div className="relative flex-1 max-w-md flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input value={itemsSearch} onChange={e => { setItemsSearch(e.target.value); setItemsPage(1); }}
+                    placeholder="Search items..." className="input-field pl-10 h-10 text-sm" />
+                </div>
               </div>
-              <button onClick={() => setItemModal(true)} className="btn-primary flex items-center gap-2 text-sm h-10">
-                <Plus className="w-4 h-4" /> Add Item
-              </button>
+              <div className="flex gap-2">
+                {selectedItemIds.size > 0 && (
+                  <button onClick={handleBulkDelete} className="btn-secondary text-red-600 border-red-100 bg-red-50 hover:bg-red-100 flex items-center gap-2 h-10 px-4 animate-in fade-in zoom-in duration-200">
+                    <Trash2 className="w-4 h-4" /> Delete ({selectedItemIds.size})
+                  </button>
+                )}
+                <button onClick={() => setItemModal(true)} className="btn-primary flex items-center gap-2 text-sm h-10">
+                  <Plus className="w-4 h-4" /> Add Item
+                </button>
+              </div>
             </div>
 
             {/* Desktop Table View */}
@@ -2064,6 +2164,14 @@ export default function Warehouse() {
               <table className="w-full text-sm text-left min-w-[700px]">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                   <tr>
+                    <th className="px-5 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                        checked={paginatedItems.length > 0 && paginatedItems.every(item => selectedItemIds.has(item.id))}
+                        onChange={toggleItemAll}
+                      />
+                    </th>
                     <th className="px-5 py-3 font-medium">Name</th>
                     <th className="px-5 py-3 font-medium">SKU</th>
                     <th className="px-5 py-3 font-medium">Brand</th>
@@ -2079,9 +2187,17 @@ export default function Warehouse() {
                     </td></tr>
                   ) : paginatedItems.map(item => {
                     const totalStock = getTotalStockForItem(item.id);
-                    const stockOk = totalStock >= (item.min_stock_limit ?? 10);
+                    const stockOk = totalStock >= (item.min_stock_limit ?? 0);
                     return (
-                      <tr key={item.id} className="hover:bg-gray-50/50 transition-colors">
+                      <tr key={item.id} className={clsx("hover:bg-gray-50/50 transition-colors", selectedItemIds.has(item.id) && 'bg-primary/5')}>
+                        <td className="px-5 py-3.5">
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                            checked={selectedItemIds.has(item.id)}
+                            onChange={() => toggleSelect(selectedItemIds, setSelectedItemIds, item.id)}
+                          />
+                        </td>
                         <td className="px-5 py-3.5 font-medium text-gray-900">{item.name}</td>
                         <td className="px-5 py-3.5 text-gray-500 font-mono text-xs">{item.sku}</td>
                         <td className="px-5 py-3.5"><span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{brandMap.get(item.brand_id)?.name || item.category || 'Unbranded'}</span></td>
@@ -2094,7 +2210,7 @@ export default function Warehouse() {
                         <td className="px-5 py-3.5 text-right">
                           <div className="flex justify-end gap-1.5">
                             <button title="Edit Item" onClick={() => { setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_INR: 0, retail_price: item.retail_price || 0, stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
-                            <button title="Delete Item" onClick={() => deleteItem(item.id)} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                            <button title="Delete Item" onClick={() => setDeleteConfirmModal({ isOpen: true, isBulk: false, id: item.id, name: item.name, tab: 'items' })} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         </td>
                       </tr>
@@ -2117,13 +2233,21 @@ export default function Warehouse() {
                     return (
                       <div key={item.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
                         <div className="flex justify-between items-start gap-2 mb-3">
-                          <div className="flex-1 min-w-0">
-                            <h3 className="font-bold text-gray-900 text-sm">{item.name}</h3>
-                            <p className="text-xs text-gray-500 mt-1 font-mono">{item.sku}</p>
+                          <div className="flex-1 min-w-0 flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer mt-1"
+                              checked={selectedItemIds.has(item.id)}
+                              onChange={() => toggleSelect(selectedItemIds, setSelectedItemIds, item.id)}
+                            />
+                            <div className="min-w-0">
+                              <h3 className="font-bold text-gray-900 text-sm">{item.name}</h3>
+                              <p className="text-xs text-gray-500 mt-1 font-mono">{item.sku}</p>
+                            </div>
                           </div>
                           <div className="flex gap-1.5 flex-shrink-0">
                             <button title="Edit Item" onClick={() => { setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_INR: 0, retail_price: item.retail_price || 0, stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
-                            <button title="Delete Item" onClick={() => deleteItem(item.id)} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
+                            <button title="Delete Item" onClick={() => setDeleteConfirmModal({ isOpen: true, isBulk: false, id: item.id, name: item.name, tab: 'items' })} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
                           </div>
                         </div>
 
@@ -2259,7 +2383,12 @@ export default function Warehouse() {
         {/* ── Locations Tab ── */}
         {activeTab === 'locations' && (
           <div>
-            <div className="p-4 flex justify-end border-b border-gray-50">
+            <div className="p-4 flex justify-end border-b border-gray-50 gap-2">
+              {selectedLocationIds.size > 0 && (
+                <button onClick={handleBulkDelete} className="btn-secondary text-red-600 border-red-100 bg-red-50 hover:bg-red-100 flex items-center gap-2 h-10 px-4 animate-in fade-in zoom-in duration-200">
+                  <Trash2 className="w-4 h-4" /> Delete ({selectedLocationIds.size})
+                </button>
+              )}
               <button onClick={() => setLocationModal(true)} className="btn-primary flex items-center gap-2 text-sm h-10"><Plus className="w-4 h-4" /> Add Location</button>
             </div>
 
@@ -2268,6 +2397,14 @@ export default function Warehouse() {
               <table className="w-full text-sm text-left">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                   <tr>
+                    <th className="px-5 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                        checked={paginatedLocations.length > 0 && paginatedLocations.every(l => selectedLocationIds.has(l.id))}
+                        onChange={toggleLocationAll}
+                      />
+                    </th>
                     <th className="px-5 py-3 font-medium">Name</th>
                     <th className="px-5 py-3 font-medium">Type</th>
                     <th className="px-5 py-3 font-medium">Country</th>
@@ -2284,7 +2421,15 @@ export default function Warehouse() {
                     const locInventory = inventory.filter(e => e.location_id === l.id);
                     const locUnits = locInventory.reduce((s, e) => s + e.quantity, 0);
                     return (
-                      <tr key={l.id} className="hover:bg-gray-50/50 transition-colors">
+                      <tr key={l.id} className={clsx("hover:bg-gray-50/50 transition-colors", selectedLocationIds.has(l.id) && 'bg-primary/5')}>
+                        <td className="px-5 py-3.5">
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                            checked={selectedLocationIds.has(l.id)}
+                            onChange={() => toggleSelect(selectedLocationIds, setSelectedLocationIds, l.id)}
+                          />
+                        </td>
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-2.5">
                             <div className={clsx("w-8 h-8 rounded-lg flex items-center justify-center", l.type === 'warehouse' ? 'bg-blue-50 text-blue-600' : 'bg-violet-50 text-violet-600')}>
@@ -2299,7 +2444,7 @@ export default function Warehouse() {
                         <td className="px-5 py-3.5 text-right font-medium text-gray-700 tabular-nums">{locInventory.length}</td>
                         <td className="px-5 py-3.5 text-right font-bold text-gray-900 tabular-nums">{locUnits.toLocaleString()}</td>
                         <td className="px-5 py-3.5 text-right">
-                          <button title="Delete Location" onClick={() => deleteLocation(l.id)} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button title="Delete Location" onClick={() => setDeleteConfirmModal({ isOpen: true, isBulk: false, id: l.id, name: l.name, tab: 'locations' })} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                         </td>
                       </tr>
                     );
@@ -2473,6 +2618,132 @@ export default function Warehouse() {
                        </div>
                     </div>
                  </div>
+              </div>
+            </div>
+            
+            <div className="mt-12 pt-8 border-t border-gray-100">
+              <div className="max-w-4xl">
+                <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest mb-2">System Maintenance</h3>
+                <p className="text-xs text-gray-400 mb-6">Administrative tools for data purging and system resets. Use with extreme caution.</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                  {/* Master Data Reset */}
+                  <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6">
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center text-orange-600 flex-shrink-0">
+                        <Boxes className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-orange-900 uppercase tracking-tight">Reset Product Catalog</h4>
+                        <p className="text-[11px] text-orange-700/70 mt-1 leading-relaxed">
+                          Deletes all <strong className="text-orange-900">Brands, Items, Containers, and Active Stock</strong>. 
+                          Transaction history and locations remain intact.
+                        </p>
+                        <button 
+                          onClick={async () => {
+                            if (window.confirm("ARE YOU SURE? This will delete all Items and Brands. History will remain but may have broken references.")) {
+                               setSaving(true);
+                               try { await clearMasterData(); alert("Product catalog cleared."); } catch (err: any) { alert(err.message); } finally { setSaving(false); }
+                            }
+                          }}
+                          disabled={saving}
+                          className="mt-4 bg-orange-600 hover:bg-orange-700 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50"
+                        >
+                          Clear Catalog
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* History Purge */}
+                  <div className="bg-red-50 border border-red-100 rounded-2xl p-6">
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center text-red-600 flex-shrink-0">
+                        <Trash2 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-red-900 uppercase tracking-tight">Purge System History</h4>
+                        <p className="text-[11px] text-red-700/70 mt-1 leading-relaxed">
+                          Permanently deletes all <strong className="text-red-900">Transactions, Sales, Returns, Expenses, and Notifications</strong>. 
+                          Items and active stock are preserved.
+                        </p>
+                        <button 
+                          onClick={async () => {
+                            if (window.confirm("CRITICAL: This will permanently delete ALL historical records. This action cannot be undone.")) {
+                               setSaving(true);
+                               try { await clearHistory(); alert("History purged successfully."); } catch (err: any) { alert(err.message); } finally { setSaving(false); }
+                            }
+                          }}
+                          disabled={saving}
+                          className="mt-4 bg-red-600 hover:bg-red-700 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50"
+                        >
+                          Purge All History
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Location Specific Stock Reset */}
+                <div className="bg-white rounded-2xl border border-gray-100 p-6 mb-8 shadow-sm">
+                  <div className="flex items-start gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
+                      <MapPin className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="text-sm font-black text-gray-900 uppercase tracking-tight">Location Stock Reset</h4>
+                      <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">
+                        Clear all active stock entries for a specific shop or warehouse.
+                      </p>
+                      
+                      <div className="mt-4 flex flex-col sm:flex-row gap-3">
+                        <select 
+                          title="Select Location to Purge"
+                          className="input-field max-w-xs text-xs h-10"
+                          value={selectedPurgeLocation}
+                          onChange={e => setSelectedPurgeLocation(e.target.value)}
+                        >
+                          <option value="">Select Location...</option>
+                          {locations.map(l => (
+                            <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
+                          ))}
+                        </select>
+                        <button 
+                          onClick={async () => {
+                            if (!selectedPurgeLocation) return alert("Please select a location.");
+                            const locName = locations.find(l => l.id === selectedPurgeLocation)?.name;
+                            if (window.confirm(`Clear all stock for ${locName}? This only affects inventory records for this location.`)) {
+                               setSaving(true);
+                               try { await clearLocationStock(selectedPurgeLocation); alert(`Stock for ${locName} cleared.`); } catch (err: any) { alert(err.message); } finally { setSaving(false); }
+                            }
+                          }}
+                          disabled={saving || !selectedPurgeLocation}
+                          className="bg-gray-900 hover:bg-black text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50"
+                        >
+                          Empty Location Stock
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-gray-100 p-6">
+                  <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest mb-4">UI Label Standards</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-4 rounded-xl bg-gray-50 border border-gray-100">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Old: Intelligence Matrix</p>
+                      <p className="text-xs font-black text-primary">New: Analytics</p>
+                    </div>
+                    <div className="p-4 rounded-xl bg-gray-50 border border-gray-100">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Old: Logistics Flow</p>
+                      <p className="text-xs font-black text-primary">New: Stock Transfer</p>
+                    </div>
+                    <div className="p-4 rounded-xl bg-gray-50 border border-gray-100">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Old: Command Center</p>
+                      <p className="text-xs font-black text-primary">New: Dashboard</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -2703,7 +2974,7 @@ export default function Warehouse() {
         </form>
       </Modal>
 
-      <Modal isOpen={itemModal} onClose={() => { setItemModal(false); setEditingItemId(null); setIsManualBrand(false); setItemForm({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 10, avg_cost_INR: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' }); }} title={editingItemId ? "Edit Item & Pricing" : "Add Item"} description={editingItemId ? "Update product details and pricing." : "Define a new product/SKU."} size="md">
+      <Modal isOpen={itemModal} onClose={() => { setItemModal(false); setEditingItemId(null); setIsManualBrand(false); setItemForm({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 0, avg_cost_INR: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' }); }} title={editingItemId ? "Edit Item & Pricing" : "Add Item"} description={editingItemId ? "Update product details and pricing." : "Define a new product/SKU."} size="md">
         <form onSubmit={handleAddItem} className="space-y-4">
           <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
             <div className="flex items-center justify-between mb-2">
@@ -2753,7 +3024,7 @@ export default function Warehouse() {
             </div>
             <div>
               <label className="label">Min Stock Limit</label>
-              <input title="Min Stock Limit" placeholder="0" required type="number" min={1} className="input-field" value={itemForm.min_stock_limit} onChange={e => setItemForm(f => ({ ...f, min_stock_limit: Number(e.target.value) }))} />
+              <input title="Min Stock Limit" placeholder="0" required type="number" min={0} className="input-field" value={itemForm.min_stock_limit} onChange={e => setItemForm(f => ({ ...f, min_stock_limit: Number(e.target.value) }))} />
             </div>
             {!editingItemId && (
               <div className="grid grid-cols-2 gap-4 col-span-2 bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100/50">
@@ -2789,7 +3060,7 @@ export default function Warehouse() {
             </div>
           </div>
           <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
-            <button type="button" className="btn-secondary" onClick={() => { setItemModal(false); setEditingItemId(null); setItemForm({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 10, avg_cost_INR: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' }); }}>Cancel</button>
+            <button type="button" className="btn-secondary" onClick={() => { setItemModal(false); setEditingItemId(null); setItemForm({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 0, avg_cost_INR: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' }); }}>Cancel</button>
             <button type="submit" className="btn-primary" disabled={saving}>{saving ? 'Saving…' : editingItemId ? 'Update Item' : 'Add Item'}</button>
           </div>
         </form>
@@ -2863,7 +3134,7 @@ export default function Warehouse() {
                 </div>
                 <button 
                   type="button" 
-                  onClick={() => setOnboardForm(f => ({ ...f, rows: [...f.rows, { brand_name: '', item_name: '', sku: '', category: '', quantity: 1, unit_cost: 0, retail_price: 0, min_stock_limit: 10, matched_item_id: '' }] }))}
+                  onClick={() => setOnboardForm(f => ({ ...f, rows: [...f.rows, { brand_name: '', item_name: '', sku: '', category: '', quantity: 1, unit_cost: 0, retail_price: 0, min_stock_limit: 0, matched_item_id: '' }] }))}
                   className="btn-secondary text-xs flex items-center gap-1 py-1.5"
                 >
                   <Plus className="w-3.5 h-3.5" /> Row
@@ -3167,7 +3438,7 @@ export default function Warehouse() {
                 </div>
                 <div>
                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Rebalancing Recommendation</p>
-                   <p className="text-xs text-white/80 mt-0.5">Contact procurement if total system stock falls below {stockDistribution?.item?.min_stock_limit || 10} units.</p>
+                   <p className="text-xs text-white/80 mt-0.5">Contact procurement if total system stock falls below {stockDistribution?.item?.min_stock_limit || 0} units.</p>
                 </div>
              </div>
           </div>
@@ -3240,7 +3511,7 @@ export default function Warehouse() {
                 </div>
                 <div>
                   <label className="label">Min Stock Limit</label>
-                  <input title="Min Stock Limit" type="number" min={1} className="input-field" value={addStockForm.min_stock_limit} onChange={e => setAddStockForm(f => ({ ...f, min_stock_limit: Number(e.target.value) }))} />
+                  <input title="Min Stock Limit" type="number" min={0} className="input-field" value={addStockForm.min_stock_limit} onChange={e => setAddStockForm(f => ({ ...f, min_stock_limit: Number(e.target.value) }))} />
                 </div>
               </div>
               <div>

@@ -11,6 +11,7 @@ export default function StockReports() {
   const today = new Date().toISOString().split('T')[0];
   const [targetDate, setTargetDate] = useState(today);
   const [exporting, setExporting] = useState(false);
+  const [showEmptyStock, setShowEmptyStock] = useState(false);
 
   // Dynamically pull ALL warehouses and ALL shops — so any future additions appear automatically
   const warehouses = locations.filter(l => l.type === 'warehouse');
@@ -128,12 +129,14 @@ export default function StockReports() {
       locations.forEach(loc => {
         sortedItems.forEach(item => {
           const row = getItemStockRow(item, loc.id);
+          if (!showEmptyStock && row.opening === 0 && row.closing === 0 && row.received === 0 && row.supplied === 0 && row.returned === 0) return;
           rows.push({ slNo: slNo++, itemName: item.name || '-', sku: item.sku || '-', locationName: loc.name, ...row });
         });
       });
     } else {
       sortedItems.forEach(item => {
         const row = getItemStockRow(item, selectedLocation);
+        if (!showEmptyStock && row.opening === 0 && row.closing === 0 && row.received === 0 && row.supplied === 0 && row.returned === 0) return;
         rows.push({ slNo: slNo++, itemName: item.name || '-', sku: item.sku || '-', locationName: selectedName, ...row });
       });
     }
@@ -170,7 +173,8 @@ export default function StockReports() {
         locationId: selectedLocation, 
         dateTo,
         inventory, items: filteredItems, locations, transactions, sales, returns, brands,
-        format: 'excel'
+        format: 'excel',
+        showEmptyStock
       });
     } catch (err: any) {
       alert('Excel export failed: ' + err.message);
@@ -188,14 +192,16 @@ export default function StockReports() {
       if (selectedLocation === 'all') {
         // Print all locations stock report
         await printAllLocationsStockReport({
-          date, sales, locations, items: filteredItems, brands, inventory, transactions, returns
+          date, sales, locations, items: filteredItems, brands, inventory, transactions, returns,
+          showEmptyStock
         });
       } else {
         await exportStockReport({
           locationId: selectedLocation,
           dateTo: date,
           inventory, items: filteredItems, locations, transactions, sales, returns, brands,
-          format: 'pdf'
+          format: 'pdf',
+          showEmptyStock
         });
       }
     } catch (err: any) {
@@ -279,9 +285,22 @@ export default function StockReports() {
               className="px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium focus:outline-none focus:border-primary"
             />
           </div>
+          
+          <div className="flex items-center gap-2 pb-2.5">
+            <input
+              type="checkbox"
+              id="showEmptyStock"
+              checked={showEmptyStock}
+              onChange={(e) => setShowEmptyStock(e.target.checked)}
+              className="w-4 h-4 text-primary border-gray-300 rounded focus:ring-primary"
+            />
+            <label htmlFor="showEmptyStock" className="text-xs font-bold text-gray-700 cursor-pointer">
+              Print Empty Stocks
+            </label>
+          </div>
 
           <button
-            onClick={() => { setTargetDate(today); setSelectedLocation('all'); setSelectedBrand('all'); }}
+            onClick={() => { setTargetDate(today); setSelectedLocation('all'); setSelectedBrand('all'); setShowEmptyStock(false); }}
             className="px-4 py-2.5 text-sm font-bold text-gray-900 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
           >
             Reset Filters

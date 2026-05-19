@@ -60,7 +60,7 @@ export default function Insights() {
         .filter(e => e.item_id === item.id)
         .reduce((sum, e) => sum + e.quantity, 0);
 
-      const minLimit = item.min_stock_limit ?? 10;
+      const minLimit = item.min_stock_limit ?? 0;
       const sale = salesMap[item.id] || { qty: 0, revenue: 0, profit: 0, orders: 0 };
       const brand = brands.find(b => b.id === item.brand_id);
 
@@ -487,7 +487,7 @@ export default function Insights() {
               </div>
               <div className="p-3.5 bg-emerald-50/50 rounded-xl border border-emerald-100/50">
                 <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1">Min Required</p>
-                <p className="text-xl font-bold text-gray-900">{stockDistribution.item?.min_stock_limit ?? 10}</p>
+                <p className="text-xl font-bold text-gray-900">{stockDistribution.item?.min_stock_limit ?? 0}</p>
               </div>
               <div className="p-3.5 bg-violet-50/50 rounded-xl border border-violet-100/50">
                 <p className="text-[10px] font-bold text-violet-600 uppercase tracking-wider mb-1">Locations</p>
@@ -497,7 +497,7 @@ export default function Insights() {
 
             {(() => {
               const totalQ = stockDistribution.distributions.reduce((s, d) => s + d.qty, 0);
-              const minL = stockDistribution.item?.min_stock_limit ?? 10;
+              const minL = stockDistribution.item?.min_stock_limit ?? 0;
               const isLow = totalQ < minL;
               const isOut = totalQ === 0;
               return (

@@ -49,7 +49,7 @@ export default function Dashboard() {
 
     const lowStockItems = items.filter(item => {
       const totalQty = inventory.filter(e => e.item_id === item.id).reduce((s, e) => s + e.quantity, 0);
-      return totalQty < (item.min_stock_limit ?? 10);
+      return totalQty < (item.min_stock_limit ?? 0);
     });
 
     const totalUnits = inventory.reduce((s, e) => s + e.quantity, 0);

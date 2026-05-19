@@ -49,7 +49,7 @@ export default function Shops() {
       if (!item || !loc) continue;
       const q = search.toLowerCase();
       if (q && !item.name.toLowerCase().includes(q) && !loc.name.toLowerCase().includes(q)) continue;
-      rows.push({ ...entry, item, loc, isLow: entry.quantity < (item.min_stock_limit ?? 10) });
+      rows.push({ ...entry, item, loc, isLow: entry.quantity < (item.min_stock_limit ?? 0) });
     }
     return rows;
   }, [inventory, items, locations, shops, filterShop, search]);

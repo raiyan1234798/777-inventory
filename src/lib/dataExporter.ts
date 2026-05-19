@@ -88,7 +88,7 @@ export class DataExporter {
         'Total Value (INR)': (inv.quantity || 0) * (inv.avg_cost_INR || 0),
         'Retail Price': item?.retail_price || 0,
         'Location': location?.name || inv.location_id || 'Unknown',
-        'Status': (inv.quantity || 0) < (item?.min_stock_limit || 10) ? 'Low Stock' : 'OK'
+        'Status': (inv.quantity || 0) < (item?.min_stock_limit || 0) ? 'Low Stock' : 'OK'
       };
     });
   }

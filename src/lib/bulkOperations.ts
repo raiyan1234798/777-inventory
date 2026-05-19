@@ -902,8 +902,9 @@ export async function exportStockReport(data: {
   sales: any[];
   returns: any[];
   format?: 'excel' | 'pdf';
+  showEmptyStock?: boolean;
 }) {
-  const { locationId, dateFrom, dateTo, inventory, items, locations, transactions, sales, returns, format, brands } = data;
+  const { locationId, dateFrom, dateTo, inventory, items, locations, transactions, sales, returns, format, brands, showEmptyStock = false } = data;
   const location = locations.find(l => l.id === locationId);
   const locationName = location?.name || 'Unknown';
   const locType = location?.type || '';
@@ -1015,7 +1016,7 @@ export async function exportStockReport(data: {
 
   // Filter out brands that have no active inventory or movements to prevent empty pages/sheets
   const activeBrandGroups = Array.from(brandGroups.entries()).filter(([_, groupItems]) => {
-    return groupItems.some(item => {
+    return showEmptyStock || groupItems.some(item => {
       return targetLocations.some(loc => {
         const m = itemMetrics.get(`${loc.id}_${item.id}`)!;
         return m.opening > 0 || m.closing > 0 || m.received > 0 || m.supplied > 0 || m.returned > 0;
@@ -1128,7 +1129,7 @@ export async function exportStockReport(data: {
       }).forEach(item => {
         targetLocations.forEach(loc => {
           const m = itemMetrics.get(`${loc.id}_${item.id}`)!;
-          if (m.opening === 0 && m.closing === 0 && m.received === 0 && m.supplied === 0 && m.returned === 0) return;
+          if (!showEmptyStock && m.opening === 0 && m.closing === 0 && m.received === 0 && m.supplied === 0 && m.returned === 0) return;
 
           const cat = (item.category || 'OTHER').toUpperCase();
           if (cat !== currentCategory) {
@@ -1210,7 +1211,7 @@ export async function exportStockReport(data: {
     }).forEach(item => {
       targetLocations.forEach(loc => {
         const m = itemMetrics.get(`${loc.id}_${item.id}`)!;
-        if (m.opening === 0 && m.closing === 0 && m.received === 0 && m.supplied === 0 && m.returned === 0) return;
+        if (!showEmptyStock && m.opening === 0 && m.closing === 0 && m.received === 0 && m.supplied === 0 && m.returned === 0) return;
 
         const cat = (item.category || 'OTHER').toUpperCase();
         if (cat !== currentCategory) {
@@ -1300,8 +1301,9 @@ export async function printAllLocationsStockReport(data: {
   inventory: any[];
   transactions: any[];
   returns: any[];
+  showEmptyStock?: boolean;
 }) {
-  const { date, sales, locations, items, brands, inventory, transactions, returns } = data;
+  const { date, sales, locations, items, brands, inventory, transactions, returns, showEmptyStock = false } = data;
   
   const win = window.open('', '_blank');
   if (!win) return alert("Popup blocked!");
@@ -1401,7 +1403,7 @@ export async function printAllLocationsStockReport(data: {
     });
 
     const activeBrandGroups = Array.from(brandGroups.entries()).filter(([_, groupItems]) => {
-      return groupItems.some(item => {
+      return showEmptyStock || groupItems.some(item => {
         const m = itemMetrics.get(item.id)!;
         return m.opening > 0 || m.closing > 0 || m.received > 0 || m.supplied > 0 || m.returned > 0;
       });
@@ -1447,7 +1449,7 @@ export async function printAllLocationsStockReport(data: {
         return (a.name || '').localeCompare(b.name || '');
       }).forEach(item => {
         const m = itemMetrics.get(item.id)!;
-        if (m.opening === 0 && m.closing === 0 && m.received === 0 && m.supplied === 0 && m.returned === 0) return;
+        if (!showEmptyStock && m.opening === 0 && m.closing === 0 && m.received === 0 && m.supplied === 0 && m.returned === 0) return;
 
         const cat = (item.category || 'OTHER').toUpperCase();
         if (cat !== currentCategory) {

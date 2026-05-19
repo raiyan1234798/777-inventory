@@ -177,9 +177,13 @@ export default function ManageWarehouses() {
                     </button>
                     <button 
                       title="Delete Warehouse"
-                      onClick={() => {
+                      onClick={async () => {
                         if (window.confirm(`Delete warehouse "${warehouse.name}"? This cannot be undone.`)) {
-                          deleteLocation(warehouse.id);
+                          try {
+                            await deleteLocation(warehouse.id);
+                          } catch (err: any) {
+                            alert(err.message);
+                          }
                         }
                       }} 
                       className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
@@ -243,9 +247,9 @@ export default function ManageWarehouses() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50 bg-white">
-                {expenses.map(e => (
+                {expenses.filter(e => e.location_type === 'warehouse' || warehouses.some(w => w.id === e.location_id)).map(e => (
                   <tr key={e.id} className="hover:bg-gray-50/50 transition-colors group">
-                    <td className="px-6 py-4 font-semibold text-gray-900">{warehouses.find(w => w.id === e.location_id)?.name || 'Unknown'}</td>
+                    <td className="px-6 py-4 font-semibold text-gray-900">{warehouses.find(w => w.id === e.location_id)?.name ?? 'Unknown Warehouse'}</td>
                     <td className="px-6 py-4">
                       <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-medium">{e.category}</span>
                     </td>
@@ -263,8 +267,8 @@ export default function ManageWarehouses() {
                     </td>
                   </tr>
                 ))}
-                {expenses.length === 0 && (
-                  <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400">No maintenance costs recorded.</td></tr>
+                {expenses.filter(e => e.location_type === 'warehouse' || warehouses.some(w => w.id === e.location_id)).length === 0 && (
+                  <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400">No warehouse maintenance costs recorded.</td></tr>
                 )}
               </tbody>
             </table>

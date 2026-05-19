@@ -7,7 +7,7 @@ import { format } from 'date-fns';
 
 export default function Transfers() {
   const { appUser } = useAuthStore();
-  const { locations, items, inventory, transactions, transfer } = useStore();
+  const { locations, items, inventory, transactions, transfer, brands } = useStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -18,7 +18,7 @@ export default function Transfers() {
     to_location: '',
   });
 
-  const [itemsToTransfer, setItemsToTransfer] = useState([{ item_id: '', quantity: 1, _id: Date.now() }]);
+  const [itemsToTransfer, setItemsToTransfer] = useState([{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }]);
 
   const sourceItems = form.from_location
     ? inventory
@@ -81,7 +81,7 @@ export default function Transfers() {
       }));
       setIsModalOpen(false);
       setForm({ from_location: '', to_location: '' });
-      setItemsToTransfer([{ item_id: '', quantity: 1, _id: Date.now() }]);
+      setItemsToTransfer([{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }]);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -90,7 +90,7 @@ export default function Transfers() {
   };
 
   const addItemRow = () => {
-    setItemsToTransfer([...itemsToTransfer, { item_id: '', quantity: 1, _id: Date.now() }]);
+    setItemsToTransfer([...itemsToTransfer, { brand_id: '', item_id: '', quantity: 1, _id: Date.now() }]);
   };
 
   const removeItemRow = (index: number) => {
@@ -277,7 +277,7 @@ export default function Transfers() {
               <select title="Source Location" required className="input-field h-12 bg-white font-bold" value={form.from_location}
                 onChange={e => {
                   setForm(f => ({ ...f, from_location: e.target.value }));
-                  setItemsToTransfer([{ item_id: '', quantity: 1, _id: Date.now() }]);
+                  setItemsToTransfer([{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }]);
                 }}>
                 <option value="">Identify source…</option>
                 {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
@@ -318,7 +318,22 @@ export default function Transfers() {
                       )}
                     </div>
                     
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                      <div className="sm:col-span-1">
+                        <select title="Select Brand" className="input-field h-12 bg-white font-bold w-full" value={itemRow.brand_id}
+                          onChange={e => {
+                            const newItems = [...itemsToTransfer];
+                            newItems[index].brand_id = e.target.value;
+                            newItems[index].item_id = ''; // reset item on brand change
+                            setItemsToTransfer(newItems);
+                          }}
+                          disabled={!form.from_location}>
+                          <option value="">All Brands</option>
+                          {brands.map(b => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="sm:col-span-2">
                         <select title="Select Item" required className="input-field h-12 bg-white font-bold w-full" value={itemRow.item_id}
                           onChange={e => {
@@ -328,11 +343,17 @@ export default function Transfers() {
                           }}
                           disabled={!form.from_location}>
                           <option value="">Choose an item…</option>
-                          {sourceItems.map(e => (
-                            <option key={e.item_id} value={e.item_id}>
-                              {e.item!.name} — {e.quantity} Available (avg {formatCurrency(e.avg_cost_INR)})
-                            </option>
-                          ))}
+                          {sourceItems
+                            .filter(e => !itemRow.brand_id || e.item!.brand_id === itemRow.brand_id)
+                            .sort((a, b) => a.item!.name.localeCompare(b.item!.name))
+                            .map(e => {
+                            const brand = brands.find(b => b.id === e.item!.brand_id);
+                            return (
+                              <option key={e.item_id} value={e.item_id}>
+                                {e.item!.name} (SKU: {e.item!.sku}) ({brand?.name ?? 'No Brand'}) — {e.quantity} Available (avg {formatCurrency(e.avg_cost_INR)})
+                              </option>
+                            );
+                          })}
                         </select>
                       </div>
 

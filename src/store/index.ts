@@ -351,6 +351,17 @@ interface AppState {
   deleteNotification: (id: string) => Promise<void>;
   deleteNotifications: (ids: string[]) => Promise<void>;
   initFirestoreSync: () => void;
+
+  // Maintenance
+  clearMasterData: () => Promise<void>;
+  clearHistory: () => Promise<void>;
+  clearLocationStock: (locationId: string) => Promise<void>;
+
+  // Bulk Deletion
+  deleteLocations: (ids: string[]) => Promise<void>;
+  deleteBrands: (ids: string[]) => Promise<void>;
+  deleteItems: (ids: string[]) => Promise<void>;
+  deleteContainers: (ids: string[]) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -421,10 +432,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  deleteStockEntry: async (id) => {
+  deleteStockEntry: async (id: string) => {
     return get().deleteStockEntries([id]);
   },
-  deleteStockEntries: async (ids) => {
+  deleteStockEntries: async (ids: string[]) => {
     try {
       console.log("[Store] Bulk deleting stock and all associated history for:", ids.length, "items");
       // id format is locationId_itemId. Extract target pairs for matching history:
@@ -451,12 +462,11 @@ export const useStore = create<AppState>((set, get) => ({
       const invToDelete = ids.map(id => doc(db, 'inventory', id));
 
       const allDocs = [...invToDelete, ...txToDelete, ...salesToDelete, ...retToDelete];
-      console.log(`[Store] Total associated documents to permanently delete: ${allDocs.length}`);
-
+      
+      // Batch process deletion
       for (let i = 0; i < allDocs.length; i += 500) {
         const batch = writeBatch(db);
-        const chunk = allDocs.slice(i, i + 500);
-        chunk.forEach(dRef => batch.delete(dRef));
+        allDocs.slice(i, i + 500).forEach(dRef => batch.delete(dRef));
         await batch.commit();
       }
     } catch (err: any) {
@@ -464,7 +474,69 @@ export const useStore = create<AppState>((set, get) => ({
       throw err;
     }
   },
-  addLocation: async (loc) => {
+
+  clearMasterData: async () => {
+    try {
+      const st = get();
+      const allInventory = st.inventory.map(i => doc(db, 'inventory', i.id));
+      const allBrands = st.brands.map(b => doc(db, 'brands', b.id));
+      const allItems = st.items.map(i => doc(db, 'items', i.id));
+      const allContainers = st.containers.map(c => doc(db, 'containers', c.id));
+
+      const allDocs = [...allInventory, ...allBrands, ...allItems, ...allContainers];
+      
+      for (let i = 0; i < allDocs.length; i += 500) {
+        const batch = writeBatch(db);
+        allDocs.slice(i, i + 500).forEach(dRef => batch.delete(dRef));
+        await batch.commit();
+      }
+    } catch (err: any) {
+      console.error("[Store] Clear Master Data Error:", err);
+      throw err;
+    }
+  },
+
+  clearHistory: async () => {
+    try {
+      const st = get();
+      const allTransactions = st.transactions.map(t => doc(db, 'transactions', t.id));
+      const allSales = st.sales.map(s => doc(db, 'sales', s.id));
+      const allReturns = st.returns.map(r => doc(db, 'returns', r.id));
+      const allNotifications = st.notifications.map(n => doc(db, 'notifications', n.id));
+      const allExpenses = st.expenses.map(e => doc(db, 'expenses', e.id));
+      const allTargets = st.targets.map(t => doc(db, 'targets', t.id));
+
+      const allDocs = [...allTransactions, ...allSales, ...allReturns, ...allNotifications, ...allExpenses, ...allTargets];
+      
+      for (let i = 0; i < allDocs.length; i += 500) {
+        const batch = writeBatch(db);
+        allDocs.slice(i, i + 500).forEach(dRef => batch.delete(dRef));
+        await batch.commit();
+      }
+    } catch (err: any) {
+      console.error("[Store] Clear History Error:", err);
+      throw err;
+    }
+  },
+
+  clearLocationStock: async (locationId: string) => {
+    try {
+      const allInventory = get().inventory
+        .filter(i => i.location_id === locationId)
+        .map(i => doc(db, 'inventory', i.id));
+
+      for (let i = 0; i < allInventory.length; i += 500) {
+        const batch = writeBatch(db);
+        allInventory.slice(i, i + 500).forEach(dRef => batch.delete(dRef));
+        await batch.commit();
+      }
+    } catch (err: any) {
+      console.error("[Store] Clear Location Stock Error:", err);
+      throw err;
+    }
+  },
+
+  addLocation: async (loc: Omit<Location, 'id'>) => {
     if (!loc.name?.trim()) throw new Error('Location name is required.');
     if (!['warehouse', 'shop'].includes(loc.type)) throw new Error('Invalid location type.');
     
@@ -475,21 +547,33 @@ export const useStore = create<AppState>((set, get) => ({
     const ref = doc(collection(db, 'locations'));
     await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...loc }));
   },
-  updateLocation: async (id, loc) => {
+  updateLocation: async (id: string, loc: Partial<Location>) => {
     if (loc.name && !loc.name.trim()) throw new Error('Location name cannot be empty.');
     if (loc.type && !['warehouse', 'shop'].includes(loc.type)) throw new Error('Invalid location type.');
 
     await updateDoc(doc(db, 'locations', id), sanitizeForFirestore(loc as Record<string, any>));
   },
-  deleteLocation: async (id) => {
-    // Safety check: ensure no inventory remains
-    const hasInventory = get().inventory.some(e => e.location_id === id && e.quantity > 0);
-    if (hasInventory) throw new Error('Cannot delete a location that still has active inventory.');
+  deleteLocation: async (id: string) => {
+    // We only block if there is POSITIVE quantity. 
+    // Records with 0 quantity (ghost records) should not block deletion.
+    const hasActiveStock = get().inventory.some(e => e.location_id === id && e.quantity > 0);
+    if (hasActiveStock) {
+      throw new Error('Cannot delete: This location still has items in stock. Please clear stock first.');
+    }
     await deleteDoc(doc(db, 'locations', id));
+  },
+  deleteLocations: async (ids: string[]) => {
+    const hasActiveStock = get().inventory.some(e => ids.includes(e.location_id) && e.quantity > 0);
+    if (hasActiveStock) {
+      throw new Error('Cannot delete: Some selected locations still have items in stock.');
+    }
+    const batch = writeBatch(db);
+    ids.forEach(id => batch.delete(doc(db, 'locations', id)));
+    await batch.commit();
   },
 
   // ── Brands ─────────────────────────────────────────────────────────────────
-  addBrand: async (brand) => {
+  addBrand: async (brand: Omit<Brand, 'id'>) => {
     if (!brand.name?.trim()) throw new Error('Brand name is required.');
     
     const exists = get().brands.some(b => b.name.toLowerCase() === brand.name.toLowerCase());
@@ -499,15 +583,22 @@ export const useStore = create<AppState>((set, get) => ({
     await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...brand }));
     return ref.id;
   },
-  deleteBrand: async (id) => {
+  deleteBrand: async (id: string) => {
     // Check if items use this brand
     const hasItems = get().items.some(i => i.brand_id === id);
     if (hasItems) throw new Error('Cannot delete brand: items are still assigned to it.');
     await deleteDoc(doc(db, 'brands', id));
   },
+  deleteBrands: async (ids: string[]) => {
+    const hasItems = get().items.some(i => ids.includes(i.brand_id));
+    if (hasItems) throw new Error('Cannot delete brands: some have items assigned to them.');
+    const batch = writeBatch(db);
+    ids.forEach(id => batch.delete(doc(db, 'brands', id)));
+    await batch.commit();
+  },
 
   // ── Items ──────────────────────────────────────────────────────────────────
-  addItem: async (item) => {
+  addItem: async (item: Omit<Item, 'id'>) => {
     if (!item.name?.trim()) throw new Error('Item name is required.');
     if (!item.sku?.trim()) throw new Error('SKU is required.');
     
@@ -517,25 +608,37 @@ export const useStore = create<AppState>((set, get) => ({
     const ref = doc(collection(db, 'items'));
     await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...item }));
   },
-  updateItem: async (id, updates) => {
+  updateItem: async (id: string, updates: Partial<Item>) => {
     if (updates.sku) {
       const exists = get().items.some(i => i.id !== id && i.sku.toLowerCase() === updates.sku!.toLowerCase());
       if (exists) throw new Error(`An item with SKU "${updates.sku}" already exists.`);
     }
     await updateDoc(doc(db, 'items', id), sanitizeForFirestore(updates as Record<string, any>));
   },
-  deleteItem: async (id) => {
+  deleteItem: async (id: string) => {
     // Check for inventory
     const hasInv = get().inventory.some(e => e.item_id === id && e.quantity > 0);
     if (hasInv) throw new Error('Cannot delete item: active inventory exists.');
     await deleteDoc(doc(db, 'items', id));
   },
+  deleteItems: async (ids: string[]) => {
+    const hasInv = get().inventory.some(e => ids.includes(e.item_id) && e.quantity > 0);
+    if (hasInv) throw new Error('Cannot delete items: active inventory exists for some selection.');
+    const batch = writeBatch(db);
+    ids.forEach(id => batch.delete(doc(db, 'items', id)));
+    await batch.commit();
+  },
 
   // ── Container ──────────────────────────────────────────────────────────────
-  addContainer: async (container) => {
+  addContainer: async (container: Omit<Container, 'id'>) => {
     const ref = doc(collection(db, 'containers'));
     await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...container }));
     return ref.id; // Return ID for chaining
+  },
+  deleteContainers: async (ids: string[]) => {
+    const batch = writeBatch(db);
+    ids.forEach(id => batch.delete(doc(db, 'containers', id)));
+    await batch.commit();
   },
 
   // ── Stock Entry ────────────────────────────────────────────────────────────

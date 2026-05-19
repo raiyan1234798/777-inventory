@@ -1,7 +1,9 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Open rules for development - Allow all read and write operations
+    // Allow all read and write operations - open access for this inventory system
+    // This is intentional: the app uses its own role-based access control
+    // and does not require Firebase Auth to protect the data.
     match /{document=**} {
       allow read, write: if true;
     }
