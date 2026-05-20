@@ -507,12 +507,15 @@ export const useStore = create<AppState>((set, get) => ({
       const invId = `${safeLocId}_${safeItemId}`;
       const existing = inventory.find(e => e.id === invId);
       const currentQty = existing?.quantity ?? 0;
-      const diff = fix.newQty - currentQty;
+
+      const sItem = updatedSessionItems.find(si => si.item_id === fix.item_id);
+      const oldReceivedQty = sItem ? sItem.receivedQty : 0;
+      const diff = fix.newQty - oldReceivedQty;
+      const newInventoryQty = existing ? Math.max(0, currentQty + diff) : fix.newQty;
 
       // 1. Check if the item itself was deleted from the main items collection, and restore it.
       const existingItem = items.find(it => it.id === fix.item_id);
       if (!existingItem) {
-        const sItem = updatedSessionItems.find(si => si.item_id === fix.item_id);
         if (sItem) {
           const brandObj = brands.find(b => b.name.toLowerCase() === sItem.brand.toLowerCase());
           const brandId = brandObj?.id ?? sItem.brand; // fallback to brand name if not found
@@ -534,9 +537,9 @@ export const useStore = create<AppState>((set, get) => ({
         id: invId,
         location_id: fix.location_id,
         item_id: fix.item_id,
-        quantity: fix.newQty,
-        opening_balance: existing?.opening_balance ?? fix.newQty,
-        received_balance: (existing?.received_balance ?? 0) + diff,
+        quantity: newInventoryQty,
+        opening_balance: existing?.opening_balance ?? newInventoryQty,
+        received_balance: existing ? (existing.received_balance || 0) + diff : fix.newQty,
         supplied_balance: existing?.supplied_balance ?? 0,
         returned_balance: existing?.returned_balance ?? 0,
         avg_cost_USD: existing?.avg_cost_USD ?? 0,
@@ -547,11 +550,9 @@ export const useStore = create<AppState>((set, get) => ({
 
       const sItemIdx = updatedSessionItems.findIndex(si => si.item_id === fix.item_id);
       if (sItemIdx !== -1) {
-        const sItem = updatedSessionItems[sItemIdx];
-        const newReceivedQty = Math.max(0, sItem.receivedQty + diff);
         updatedSessionItems[sItemIdx] = {
-          ...sItem,
-          receivedQty: newReceivedQty
+          ...updatedSessionItems[sItemIdx],
+          receivedQty: fix.newQty
         };
       }
 
