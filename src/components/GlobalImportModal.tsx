@@ -198,7 +198,7 @@ export default function GlobalImportModal() {
       results.push({
         name: itemName, qty: Math.max(qty, 0),
         unitCost: 0, retailPrice: 0, minStockLimit: 0,
-        sku: code || generateBrandSKU(brandName || 'Imported', itemName, usedSkus),
+        sku: generateBrandSKU(brandName || 'Imported', itemName, usedSkus, code),
         category: brandName || 'Imported',
         brandName,
         code,
@@ -493,7 +493,7 @@ export default function GlobalImportModal() {
           itemId = iRef.id;
           const newItem = {
             id: itemId, brand_id: brandId || brands[0]?.id || 'imported', name: pItem.name,
-            sku: pItem.sku || generateBrandSKU(brandNameText, pItem.name, importedSkusSet),
+            sku: generateBrandSKU(brandNameText, pItem.name, importedSkusSet, pItem.sku),
             category: pItem.category || 'Imported',
             min_stock_limit: pItem.minStockLimit || 0,
             retail_price: pItem.retailPrice || 0,

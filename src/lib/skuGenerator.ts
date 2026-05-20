@@ -1,49 +1,48 @@
 /**
  * generateBrandSKU
  *
- * Produces a unique SKU based on brand name + item name.
+ * Produces a unique SKU based on brand name + item name (with optional code override).
  *
- * Format: {BRAND_PREFIX}-{ITEM_INITIALS}[-{SEQ}]
+ * Format: {BRAND_PREFIX}-{ITEM_CODE}
  *
- * Examples:
- *   "Chinese Panda" + "Leather Jacket"  → "CP-LJ"
- *   "Chinese Panda" + "Men Jeans Pant"  → "CP-MJP"
- *   "Nike"          + "Air Max 90"       → "NK-AM9"
- *   "Adidas"        + "Ultra Boost"      → "AD-UB"
+ * Brand Prefix is the first letter of each word in the brand name:
+ *   "Zomba"         → "Z"
+ *   "Mukango"       → "M"
+ *   "Chinese Panda" → "CP"
  *
- * If the generated SKU already exists in existingSkus, a numeric suffix is appended:
- *   "CP-LJ", "CP-LJ-2", "CP-LJ-3", …
+ * If a code override (like "LCB", "BAGS", or "22") is provided, we format it as {BRAND_PREFIX}-{CODE}.
+ * If the code override already starts with the brand prefix, we preserve it.
+ *
+ * Collision Handling:
+ * If the SKU already exists, we append "-2", "-3", etc.
  */
 
-/** Get 2-3 letter brand prefix from brand name */
+/** Get brand prefix by taking the first letter of each word in the brand name */
 export function brandPrefix(brandName: string): string {
-  const words = brandName
+  const cleaned = (brandName || '')
+    .replace(/[-_/]/g, ' ')
     .toUpperCase()
     .replace(/[^A-Z0-9\s]/g, '')
-    .split(/\s+/)
-    .filter(Boolean);
+    .trim();
+
+  const words = cleaned.split(/\s+/).filter(Boolean);
 
   if (words.length === 0) return 'XX';
 
-  if (words.length === 1) {
-    // Single word: take first 2 chars
-    return words[0].slice(0, 2);
-  }
-
-  // Multiple words: take first letter of each word, max 3
   return words
-    .slice(0, 3)
     .map(w => w[0])
     .join('');
 }
 
-/** Get 2-4 letter item code from item name */
+/** Get initials/code from item name */
 export function itemCode(itemName: string): string {
-  const words = itemName
+  const cleaned = (itemName || '')
+    .replace(/[-_/]/g, ' ')
     .toUpperCase()
     .replace(/[^A-Z0-9\s]/g, '')
-    .split(/\s+/)
-    .filter(Boolean);
+    .trim();
+
+  const words = cleaned.split(/\s+/).filter(Boolean);
 
   if (words.length === 0) return 'XX';
 
@@ -64,16 +63,38 @@ export function itemCode(itemName: string): string {
  * @param brandName  - The brand name (e.g. "Chinese Panda")
  * @param itemName   - The item name (e.g. "Leather Jacket")
  * @param existingSkus - Set of already-used SKUs (to avoid collisions)
- * @returns          - Unique SKU string (e.g. "CP-LJ")
+ * @param codeOverride - Optional existing SKU/code (e.g. "LCB" or "BAGS" or "22")
+ * @returns          - Unique SKU string (e.g. "CP-LCB")
  */
 export function generateBrandSKU(
   brandName: string,
   itemName: string,
-  existingSkus: Set<string> = new Set()
+  existingSkus: Set<string> = new Set(),
+  codeOverride?: string
 ): string {
   const bp = brandPrefix(brandName || 'XX');
-  const ic = itemCode(itemName || 'XX');
-  const base = `${bp}-${ic}`;
+  const cleanOverride = codeOverride ? codeOverride.trim().toUpperCase() : '';
+
+  let base = '';
+  if (cleanOverride) {
+    // Normalize cleanOverride (remove leading/trailing spaces, replace duplicate separators if any)
+    const upperOverride = cleanOverride;
+    // Check if cleanOverride already starts with bp (e.g. "CP-LCB" starts with "CP")
+    // To be safe, we can match: bp followed by non-alphanumeric, or equal to bp, or just startsWith
+    const startsWithBp = upperOverride.startsWith(bp);
+    if (startsWithBp) {
+      base = upperOverride;
+    } else {
+      // Prepend brand prefix
+      base = `${bp}-${upperOverride}`;
+    }
+  } else {
+    const ic = itemCode(itemName || 'XX');
+    base = `${bp}-${ic}`;
+  }
+
+  // Final sanitization of double hyphens or spacing
+  base = base.replace(/-+/g, '-').trim();
 
   if (!existingSkus.has(base)) return base;
 
@@ -87,11 +108,17 @@ export function generateBrandSKU(
 }
 
 /**
- * Regenerate a SKU for an item without collision checking.
- * Use when you just want the canonical form (not guaranteed unique).
+ * Get canonical SKU form.
  */
-export function canonicalSKU(brandName: string, itemName: string): string {
+export function canonicalSKU(brandName: string, itemName: string, codeOverride?: string): string {
   const bp = brandPrefix(brandName || 'XX');
+  const cleanOverride = codeOverride ? codeOverride.trim().toUpperCase() : '';
+
+  if (cleanOverride) {
+    if (cleanOverride.startsWith(bp)) return cleanOverride;
+    return `${bp}-${cleanOverride}`.replace(/-+/g, '-');
+  }
+
   const ic = itemCode(itemName || 'XX');
-  return `${bp}-${ic}`;
+  return `${bp}-${ic}`.replace(/-+/g, '-');
 }

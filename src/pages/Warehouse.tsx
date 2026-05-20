@@ -852,7 +852,7 @@ export default function Warehouse() {
 
       for (const it of items) {
         const brand = brands.find(b => b.id === it.brand_id);
-        const newSku = generateBrandSKU(brand?.name ?? 'XX', it.name, usedSkus);
+        const newSku = generateBrandSKU(brand?.name ?? 'XX', it.name, usedSkus, it.sku);
         usedSkus.add(newSku);
         if (opCount >= CHUNK) {
           await batch.commit();
@@ -875,7 +875,7 @@ export default function Warehouse() {
   const handleRegenSingleSKU = async (item: Item) => {
     const brand = brands.find(b => b.id === item.brand_id);
     const usedSkus = new Set<string>(items.filter(i => i.id !== item.id).map(i => i.sku).filter(Boolean));
-    const newSku = generateBrandSKU(brand?.name ?? 'XX', item.name, usedSkus);
+    const newSku = generateBrandSKU(brand?.name ?? 'XX', item.name, usedSkus, item.sku);
     if (newSku === item.sku) { alert(`SKU is already correct: ${newSku}`); return; }
     if (!window.confirm(`Regenerate SKU for "${item.name}"?\n\nCurrent: ${item.sku}\nNew:     ${newSku}`)) return;
     try {
