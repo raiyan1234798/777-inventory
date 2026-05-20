@@ -157,8 +157,9 @@ export default function GlobalImportModal() {
 
     if (headerIdx === -1 || colMap['name'] === undefined) return results;
 
-    // Track used SKUs in this sheet to avoid duplicates
-    const usedSkus = new Set<string>();
+    const { items, brands } = useStore.getState();
+    // Track used SKUs in this sheet and database to avoid duplicates
+    const usedSkus = new Set<string>(items.map(it => it.sku).filter(Boolean));
 
     // Parse data rows
     for (let i = headerIdx + 1; i < rows.length; i++) {
@@ -196,16 +197,29 @@ export default function GlobalImportModal() {
         qty = opening + received - supplied + returned;
       }
 
+      // Check if this brand item already exists and has an SKU assigned
+      const matchedBrand = brands.find(b => b.name.trim().toUpperCase() === (brandName || 'Imported').trim().toUpperCase());
+      const existingItem = matchedBrand 
+        ? items.find(it => it.brand_id === matchedBrand.id && it.name.toLowerCase().trim() === itemName.toLowerCase().trim())
+        : null;
+
+      let skuCode = '';
+      if (existingItem) {
+        skuCode = existingItem.sku;
+      } else {
+        skuCode = generateBrandSKU(brandName || 'Imported', itemName, usedSkus, code);
+      }
+
       results.push({
         name: itemName, qty: Math.max(qty, 0),
         unitCost: 0, retailPrice: 0, minStockLimit: 0,
-        sku: generateBrandSKU(brandName || 'Imported', itemName, usedSkus, code),
+        sku: skuCode,
         category: brandName || 'Imported',
         brandName,
         code,
         opening, received, supplied, returned, closing
       });
-      usedSkus.add(results[results.length - 1].sku);
+      usedSkus.add(skuCode);
     }
 
     return results;
