@@ -159,7 +159,18 @@ export default function Warehouse() {
   const [importHistorySearch, setImportHistorySearch] = useState('');
   const [selectedSession, setSelectedSession] = useState<ImportSession | null>(null);
   const [isFixModalOpen, setIsFixModalOpen] = useState(false);
-  const [fixItems, setFixItems] = useState<{ item_id: string; item_name: string; sku: string; brand: string; currentQty: number; newQty: number; diff: number }[]>([]);
+  const [isFixModalMinimized, setIsFixModalMinimized] = useState(false);
+  const [fixItems, setFixItems] = useState<{
+    item_id: string;
+    item_name: string;
+    sku: string;
+    brand: string;
+    invoiceQty: number;
+    currentQty: number;
+    originalReceivedQty: number;
+    newReceivedQty: number;
+    diff: number;
+  }[]>([]);
   const [fixSaving, setFixSaving] = useState(false);
   const [deleteSessionConfirm, setDeleteSessionConfirm] = useState<string | null>(null);
 
@@ -796,25 +807,34 @@ export default function Warehouse() {
     setSelectedSession(session);
     const rows = session.items.map(si => {
       const invEntry = inventory.find(e => e.item_id === si.item_id && e.location_id === session.location_id);
-      const current = invEntry?.quantity ?? si.receivedQty;
+      const current = invEntry?.quantity ?? 0;
       return {
         item_id: si.item_id,
         item_name: si.item_name,
         sku: si.sku,
         brand: si.brand,
+        invoiceQty: si.invoiceQty,
         currentQty: current,
-        newQty: current,
+        originalReceivedQty: si.receivedQty,
+        newReceivedQty: si.receivedQty,
         diff: 0,
       };
     });
     setFixItems(rows);
     setIsFixModalOpen(true);
+    setIsFixModalMinimized(false);
   };
 
   const handleFixQtyChange = (idx: number, val: number) => {
     setFixItems(prev => {
       const next = [...prev];
-      next[idx] = { ...next[idx], newQty: val, diff: val - next[idx].currentQty };
+      const row = next[idx];
+      const diff = val - row.originalReceivedQty;
+      next[idx] = { 
+        ...row, 
+        newReceivedQty: val, 
+        diff: diff 
+      };
       return next;
     });
   };
@@ -822,15 +842,16 @@ export default function Warehouse() {
   const handleApplyFixes = async () => {
     if (!selectedSession) return;
     const changed = fixItems.filter(r => r.diff !== 0);
-    if (changed.length === 0) { setIsFixModalOpen(false); return; }
+    if (changed.length === 0) { setIsFixModalOpen(false); setIsFixModalMinimized(false); return; }
     setFixSaving(true);
     try {
       await fixImportStock(
         selectedSession.id,
-        changed.map(r => ({ item_id: r.item_id, newQty: r.newQty, location_id: selectedSession.location_id }))
+        changed.map(r => ({ item_id: r.item_id, newQty: r.currentQty + r.diff, location_id: selectedSession.location_id }))
       );
-      alert(`✅ Stock fixed! ${changed.length} item(s) updated.`);
+      alert(`✅ Import stocks reconciled! ${changed.length} item(s) adjusted.`);
       setIsFixModalOpen(false);
+      setIsFixModalMinimized(false);
     } catch (err: any) {
       alert('Fix failed: ' + err.message);
     } finally {
@@ -2316,71 +2337,84 @@ export default function Warehouse() {
               )}
 
               {/* ── Fix Stocks Modal ── */}
-              {isFixModalOpen && selectedSession && (
+              {(isFixModalOpen || isFixModalMinimized) && selectedSession && (
                 <Modal
-                  isOpen
-                  onClose={() => setIsFixModalOpen(false)}
-                  title={`Fix Stocks — ${selectedSession.fileName}`}
-                  description={`Adjust quantities for ${locations.find(l => l.id === selectedSession.location_id)?.name ?? selectedSession.location_id}. Changes apply immediately to live inventory.`}
+                  isOpen={isFixModalOpen || isFixModalMinimized}
+                  onClose={() => { setIsFixModalOpen(false); setIsFixModalMinimized(false); }}
+                  minimized={isFixModalMinimized}
+                  onMinimize={() => { setIsFixModalMinimized(true); setIsFixModalOpen(false); }}
+                  onRestore={() => { setIsFixModalMinimized(false); setIsFixModalOpen(true); }}
+                  title={`Reconcile Import — ${selectedSession.fileName}`}
+                  minimizeLabel={`Reconciling ${selectedSession.fileName}`}
+                  description={`Review and adjust received stock quantities for ${locations.find(l => l.id === selectedSession.location_id)?.name ?? selectedSession.location_id}. Adjustments directly sync to live inventory and transactions.`}
                   size="xl"
                 >
                   <div className="space-y-4">
                     {/* Summary bar */}
-                    <div className="flex items-center gap-4 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-sm">
-                      <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                      <span className="text-amber-700">
-                        Edit the <strong>New Qty</strong> column. The <strong>Diff</strong> column shows the change.
-                        Only items with a non-zero diff will be saved.
+                    <div className="flex items-center gap-4 bg-indigo-50/60 border border-indigo-100 rounded-xl px-4 py-3 text-sm">
+                      <AlertTriangle className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                      <span className="text-indigo-850">
+                        Adjust the <strong>Received Qty</strong> column below to match what was actually received. Mismatches with the invoice are automatically recalculated, and live inventory will update accordingly.
                       </span>
                     </div>
 
                     {/* Quick tools */}
                     <div className="flex items-center gap-2 flex-wrap text-xs">
-                      <span className="text-gray-400 font-semibold">Quick:</span>
+                      <span className="text-gray-400 font-semibold">Quick Actions:</span>
                       <button
                         type="button"
-                        onClick={() => setFixItems(prev => prev.map(r => ({ ...r, newQty: r.currentQty, diff: 0 })))}
-                        className="px-3 py-1 bg-gray-100 rounded-lg hover:bg-gray-200 text-gray-600 font-medium transition"
-                      >Reset All</button>
+                        onClick={() => setFixItems(prev => prev.map(r => ({ ...r, newReceivedQty: r.originalReceivedQty, diff: 0 })))}
+                        className="px-3 py-1 bg-gray-100 rounded-lg hover:bg-gray-200 text-gray-650 font-medium transition"
+                      >Reset All Adjustments</button>
+                      <button
+                        type="button"
+                        onClick={() => setFixItems(prev => prev.map(r => {
+                          const diff = r.invoiceQty - r.originalReceivedQty;
+                          return { ...r, newReceivedQty: r.invoiceQty, diff };
+                        }))}
+                        className="px-3 py-1 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-lg hover:bg-emerald-100 font-medium transition"
+                      >Match to Invoice (No Mismatch)</button>
                     </div>
 
                     {/* Table */}
-                    <div className="overflow-x-auto rounded-xl border border-gray-100">
+                    <div className="overflow-x-auto rounded-xl border border-gray-150 max-h-[500px] overflow-y-auto">
                       <table className="w-full text-sm">
-                        <thead className="bg-gray-50 border-b border-gray-100">
+                        <thead className="bg-gray-50 border-b border-gray-150 sticky top-0 z-10">
                           <tr>
                             <th className="text-left px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Item</th>
                             <th className="text-left px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Brand</th>
                             <th className="text-left px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">SKU</th>
-                            <th className="text-right px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Import Qty</th>
-                            <th className="text-right px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Current</th>
-                            <th className="text-right px-4 py-3 text-[11px] font-bold text-indigo-600 uppercase tracking-wide">New Qty</th>
-                            <th className="text-right px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Diff</th>
+                            <th className="text-right px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Invoice Qty</th>
+                            <th className="text-right px-4 py-3 text-[11px] font-bold text-indigo-650 uppercase tracking-wide">Received Qty</th>
+                            <th className="text-right px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Mismatch</th>
+                            <th className="text-right px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Current Stock</th>
+                            <th className="text-right px-4 py-3 text-[11px] font-bold text-gray-500 uppercase tracking-wide">Live Impact</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-50">
+                        <tbody className="divide-y divide-gray-100">
                           {fixItems.map((row, idx) => {
-                            const origItem = selectedSession.items.find(si => si.item_id === row.item_id);
+                            const mismatch = row.newReceivedQty - row.invoiceQty;
                             return (
                               <tr key={idx} className={clsx('transition-colors', row.diff !== 0 ? 'bg-indigo-50/40' : 'bg-white hover:bg-gray-50/50')}>
                                 <td className="px-4 py-2.5">
                                   <span className="text-xs font-semibold text-gray-900">{row.item_name}</span>
                                 </td>
                                 <td className="px-4 py-2.5">
-                                  <span className="text-[10px] bg-gray-100 text-gray-500 rounded-full px-2 py-0.5 font-medium">{row.brand}</span>
+                                  <span className="text-[10px] bg-gray-100 text-gray-600 rounded-md px-2 py-0.5 font-medium">{row.brand}</span>
                                 </td>
                                 <td className="px-4 py-2.5 text-xs text-gray-400 font-mono">{row.sku || '—'}</td>
-                                <td className="px-4 py-2.5 text-right text-xs font-medium text-gray-500">
-                                  {origItem?.invoiceQty ?? '—'}
+                                
+                                {/* Invoice Qty */}
+                                <td className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">
+                                  {row.invoiceQty}
                                 </td>
-                                <td className="px-4 py-2.5 text-right text-xs font-bold text-gray-700">
-                                  {row.currentQty}
-                                </td>
+
+                                {/* Received Qty input */}
                                 <td className="px-4 py-2.5 text-right">
                                   <div className="flex items-center justify-end gap-1">
                                     <button
                                       type="button"
-                                      onClick={() => handleFixQtyChange(idx, Math.max(0, row.newQty - 1))}
+                                      onClick={() => handleFixQtyChange(idx, Math.max(0, row.newReceivedQty - 1))}
                                       className="p-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-500 transition"
                                     >
                                       <Minus className="w-3 h-3" />
@@ -2388,25 +2422,46 @@ export default function Warehouse() {
                                     <input
                                       type="number"
                                       min={0}
-                                      value={row.newQty}
+                                      value={row.newReceivedQty}
                                       onChange={e => handleFixQtyChange(idx, Math.max(0, Number(e.target.value)))}
                                       className="w-16 text-right text-xs font-bold text-indigo-700 border border-indigo-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-indigo-300 bg-white outline-none"
                                     />
                                     <button
                                       type="button"
-                                      onClick={() => handleFixQtyChange(idx, row.newQty + 1)}
+                                      onClick={() => handleFixQtyChange(idx, row.newReceivedQty + 1)}
                                       className="p-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-500 transition"
                                     >
                                       <Plus className="w-3 h-3" />
                                     </button>
                                   </div>
                                 </td>
+
+                                {/* Mismatch display */}
                                 <td className="px-4 py-2.5 text-right">
                                   <span className={clsx(
-                                    'text-xs font-bold',
-                                    row.diff > 0 ? 'text-emerald-600' : row.diff < 0 ? 'text-red-500' : 'text-gray-300'
+                                    'text-xs font-bold px-2.5 py-0.5 rounded-full border',
+                                    mismatch > 0 ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                                    mismatch < 0 ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                                    'bg-gray-50 text-gray-400 border-gray-200'
                                   )}>
-                                    {row.diff > 0 ? '+' : ''}{row.diff !== 0 ? row.diff : '—'}
+                                    {mismatch > 0 ? `+${mismatch}` : mismatch < 0 ? `${mismatch}` : 'Match'}
+                                  </span>
+                                </td>
+
+                                {/* Current stock display */}
+                                <td className="px-4 py-2.5 text-right text-xs font-medium text-gray-500">
+                                  {row.currentQty}
+                                </td>
+
+                                {/* Live stock impact display */}
+                                <td className="px-4 py-2.5 text-right">
+                                  <span className={clsx(
+                                    'text-xs font-bold px-2 py-0.5 rounded-md',
+                                    row.diff > 0 ? 'text-emerald-600 bg-emerald-50/50' :
+                                    row.diff < 0 ? 'text-rose-600 bg-rose-50/50' :
+                                    'text-gray-300'
+                                  )}>
+                                    {row.diff > 0 ? `+${row.diff} Live` : row.diff < 0 ? `${row.diff} Live` : '—'}
                                   </span>
                                 </td>
                               </tr>
@@ -2417,12 +2472,12 @@ export default function Warehouse() {
                     </div>
 
                     {/* Summary footer */}
-                    <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
+                    <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3 border border-gray-150">
                       <div className="text-xs text-gray-500">
                         <span className="font-bold text-indigo-600">{fixItems.filter(r => r.diff !== 0).length}</span> item(s) will be changed
                       </div>
                       <div className="flex gap-3">
-                        <button type="button" onClick={() => setIsFixModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-xl hover:bg-gray-50">
+                        <button type="button" onClick={() => { setIsFixModalOpen(false); setIsFixModalMinimized(false); }} className="px-4 py-2 text-sm font-medium text-gray-650 bg-white border border-gray-200 rounded-xl hover:bg-gray-50">
                           Cancel
                         </button>
                         <button
