@@ -494,7 +494,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   fixImportStock: async (sessionId, fixes) => {
     const batch = writeBatch(db);
-    const { inventory, importSessions, transactions } = get();
+    const { inventory, importSessions, transactions, items, brands } = get();
 
     const session = importSessions.find(s => s.id === sessionId);
     if (!session) throw new Error('Session not found');
@@ -509,6 +509,27 @@ export const useStore = create<AppState>((set, get) => ({
       const currentQty = existing?.quantity ?? 0;
       const diff = fix.newQty - currentQty;
 
+      // 1. Check if the item itself was deleted from the main items collection, and restore it.
+      const existingItem = items.find(it => it.id === fix.item_id);
+      if (!existingItem) {
+        const sItem = updatedSessionItems.find(si => si.item_id === fix.item_id);
+        if (sItem) {
+          const brandObj = brands.find(b => b.name.toLowerCase() === sItem.brand.toLowerCase());
+          const brandId = brandObj?.id ?? sItem.brand; // fallback to brand name if not found
+          batch.set(doc(db, 'items', fix.item_id), {
+            id: fix.item_id,
+            brand_id: brandId,
+            name: sItem.item_name,
+            sku: sItem.sku || '',
+            category: 'Imported (Restored)',
+            min_stock_limit: 0,
+            retail_price: sItem.retailPrice || 0,
+            avg_cost_USD: sItem.unitCost || 0
+          });
+        }
+      }
+
+      // 2. Set/update the inventory document (creates automatically if deleted/missing).
       batch.set(doc(db, 'inventory', invId), {
         id: invId,
         location_id: fix.location_id,
@@ -534,6 +555,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
       }
 
+      // 3. Update or recreate the transaction record for this import/container.
       if (session.container_id) {
         const tx = transactions.find(t => t.container_id === session.container_id && t.item_id === fix.item_id && t.type === 'stock_entry');
         if (tx) {
@@ -542,6 +564,27 @@ export const useStore = create<AppState>((set, get) => ({
           batch.update(doc(db, 'transactions', tx.id), {
             quantity: newTxQty,
             converted_value_USD: newConvertedValue
+          });
+        } else {
+          // If transaction was deleted, recreate it in full.
+          const sItem = updatedSessionItems.find(si => si.item_id === fix.item_id);
+          const txRef = doc(collection(db, 'transactions'));
+          const newTxQty = fix.newQty;
+          const unitCost = sItem?.unitCost || 0;
+          batch.set(txRef, {
+            id: txRef.id,
+            type: 'stock_entry',
+            from_location: 'supplier',
+            to_location: fix.location_id,
+            item_id: fix.item_id,
+            item_name: sItem?.item_name || 'Restored Item',
+            quantity: newTxQty,
+            unit_cost: unitCost,
+            currency: session.currency || 'USD',
+            converted_value_USD: newTxQty * unitCost,
+            performed_by: 'System Reconcile',
+            timestamp: new Date().toISOString(),
+            container_id: session.container_id
           });
         }
       }

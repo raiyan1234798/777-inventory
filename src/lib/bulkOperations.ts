@@ -1387,9 +1387,9 @@ export async function printAllLocationsStockReport(data: {
 
       if (isToday && invEntry) {
         opening = invEntry.opening_balance || 0;
-        received = (invEntry.received_balance || 0) + txReceived;
-        supplied = (invEntry.supplied_balance || 0) + txSupplied;
-        returned = (invEntry.returned_balance || 0) + txReturned;
+        received = invEntry.received_balance || 0;
+        supplied = invEntry.supplied_balance || 0;
+        returned = invEntry.returned_balance || 0;
         closing = opening + received - supplied + returned;
       } else {
         const currentQty = invEntry?.quantity || 0;

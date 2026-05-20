@@ -171,6 +171,8 @@ export default function Warehouse() {
     originalReceivedQty: number;
     newReceivedQty: number;
     diff: number;
+    itemDeleted?: boolean;
+    stockRecordDeleted?: boolean;
   }[]>([]);
   const [fixSaving, setFixSaving] = useState(false);
   const [deleteSessionConfirm, setDeleteSessionConfirm] = useState<string | null>(null);
@@ -808,6 +810,7 @@ export default function Warehouse() {
     setSelectedSession(session);
     setFixModalSearch('');
     const rows = session.items.map(si => {
+      const itemExists = items.some(it => it.id === si.item_id);
       const invEntry = inventory.find(e => e.item_id === si.item_id && e.location_id === session.location_id);
       const current = invEntry?.quantity ?? 0;
       return {
@@ -820,6 +823,8 @@ export default function Warehouse() {
         originalReceivedQty: si.receivedQty,
         newReceivedQty: si.receivedQty,
         diff: 0,
+        itemDeleted: !itemExists,
+        stockRecordDeleted: !invEntry,
       };
     });
     setFixItems(rows);
@@ -2424,7 +2429,21 @@ export default function Warehouse() {
                             return (
                               <tr key={row.item_id} className={clsx('transition-colors', row.diff !== 0 ? 'bg-indigo-50/40' : 'bg-white hover:bg-gray-50/50')}>
                                 <td className="px-4 py-2.5">
-                                  <span className="text-xs font-semibold text-gray-900">{row.item_name}</span>
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="text-xs font-semibold text-gray-900">{row.item_name}</span>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {row.itemDeleted && (
+                                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
+                                          ⚠️ Item Deleted
+                                        </span>
+                                      )}
+                                      {!row.itemDeleted && row.stockRecordDeleted && (
+                                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-700 border border-amber-200">
+                                          ⚠️ Stock Record Deleted
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
                                 </td>
                                 <td className="px-4 py-2.5">
                                   <span className="text-[10px] bg-gray-100 text-gray-600 rounded-md px-2 py-0.5 font-medium">{row.brand}</span>
