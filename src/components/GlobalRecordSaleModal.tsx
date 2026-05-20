@@ -93,9 +93,6 @@ export default function GlobalRecordSaleModal() {
           <div className="md:col-span-2 space-y-4">
             <div className="flex items-center justify-between">
               <label className="label">Items Sold</label>
-              <button type="button" onClick={addSaleItemRow} className="text-xs text-primary font-bold flex items-center gap-1 hover:text-primary-dark">
-                <Plus className="w-4 h-4" /> Add Item
-              </button>
             </div>
 
             {recordSaleItems.map((si, index) => {
@@ -182,9 +179,9 @@ export default function GlobalRecordSaleModal() {
                             const brand = brands.find(b => b.id === e.item!.brand_id);
                             const sku = e.item!.sku?.trim() || 'No SKU';
                             return (
-                              <option key={e.item_id} value={e.item_id}>
-                                {e.item!.name} (SKU: {sku}) ({brand?.name ?? 'No Brand'}) — {e.quantity} Available
-                              </option>
+                               <option key={e.item_id} value={e.item_id}>
+                                 {e.item!.name} (SKU: {sku}) ({brand?.name ?? 'No Brand'}) — {e.quantity} Available
+                               </option>
                             );
                           })}
                       </select>
@@ -225,6 +222,12 @@ export default function GlobalRecordSaleModal() {
                 </div>
               );
             })}
+
+            <div className="flex justify-end pt-2">
+              <button type="button" onClick={addSaleItemRow} className="btn-secondary text-xs h-10 px-4 font-black uppercase tracking-widest text-primary flex items-center gap-1 hover:bg-gray-100 border-dashed border-2 border-primary/30">
+                <Plus className="w-4 h-4" /> Add Item
+              </button>
+            </div>
           </div>
         </div>
 
