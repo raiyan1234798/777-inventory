@@ -307,7 +307,7 @@ export default function BulkImportModal({ isOpen, onClose, onImport }: BulkImpor
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-bold text-gray-600 mb-2">Unit Cost (₹)</label>
+                          <label className="block text-xs font-bold text-gray-600 mb-2">Unit Cost ($)</label>
                           <input
                             type="number"
                             step="0.01"
@@ -359,7 +359,7 @@ export default function BulkImportModal({ isOpen, onClose, onImport }: BulkImpor
                           <tr key={idx} className="hover:bg-gray-50">
                             <td className="px-4 py-2 font-medium text-gray-900">{row.item_name}</td>
                             <td className="px-4 py-2 text-gray-600">{row.quantity}</td>
-                            <td className="px-4 py-2 text-gray-600">₹{row.unit_cost}</td>
+                            <td className="px-4 py-2 text-gray-600">${row.unit_cost}</td>
                             <td className="px-4 py-2">
                               <button
                                 onClick={() => handleEditRow(idx, row)}

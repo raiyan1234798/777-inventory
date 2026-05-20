@@ -11,7 +11,7 @@ import { Sparkline, DonutChart, Gauge } from '../components/DashboardCharts';
 
 export default function Finance() {
   const { sales, containers, locations, items, inventory } = useStore();
-  const [displayCurrency, setDisplayCurrency] = useState('INR');
+  const [displayCurrency, setDisplayCurrency] = useState('USD');
 
   const convert = (amountINR: number) => {
     const rate = EXCHANGE_RATES[displayCurrency] ?? 1;
@@ -21,11 +21,11 @@ export default function Finance() {
   const fmt = (amountINR: number) => formatCurrency(convert(amountINR), displayCurrency);
 
   const stats = useMemo(() => {
-    const totalRevenue = sales.reduce((s, x) => s + x.converted_price_INR, 0);
-    const totalCOGS = sales.reduce((s, x) => s + x.avg_cost_INR * x.quantity, 0);
-    const totalProfit = sales.reduce((s, x) => s + x.profit_INR, 0);
-    const totalContainerCost = containers.reduce((s, c) => s + c.converted_cost_INR, 0);
-    const totalInventoryValue = inventory.reduce((s, e) => s + e.quantity * e.avg_cost_INR, 0);
+    const totalRevenue = sales.reduce((s, x) => s + x.converted_price_USD, 0);
+    const totalCOGS = sales.reduce((s, x) => s + x.avg_cost_USD * x.quantity, 0);
+    const totalProfit = sales.reduce((s, x) => s + x.profit_USD, 0);
+    const totalContainerCost = containers.reduce((s, c) => s + c.converted_cost_USD, 0);
+    const totalInventoryValue = inventory.reduce((s, e) => s + e.quantity * e.avg_cost_USD, 0);
     const profitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
     
     const totalPotentialRevenue = inventory.reduce((s, e) => {
@@ -45,7 +45,7 @@ export default function Finance() {
   const salesByLocation = useMemo(() => {
     const map: Record<string, number> = {};
     sales.forEach(s => {
-      map[s.location_id] = (map[s.location_id] || 0) + s.converted_price_INR;
+      map[s.location_id] = (map[s.location_id] || 0) + s.converted_price_USD;
     });
     const colors = ['#3b82f6', '#10b981', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6'];
     return Object.entries(map)
@@ -61,7 +61,7 @@ export default function Finance() {
   const salesByCurrency = useMemo(() => {
     const map: Record<string, number> = {};
     sales.forEach(s => {
-      map[s.currency] = (map[s.currency] || 0) + s.converted_price_INR;
+      map[s.currency] = (map[s.currency] || 0) + s.converted_price_USD;
     });
     const total = Object.values(map).reduce((a, b) => a + b, 0) || 1;
     const colors: Record<string, string> = { 
@@ -82,8 +82,8 @@ export default function Finance() {
     const map: Record<string, { revenue: number; profit: number; qty: number }> = {};
     sales.forEach(s => {
       if (!map[s.item_id]) map[s.item_id] = { revenue: 0, profit: 0, qty: 0 };
-      map[s.item_id].revenue += s.converted_price_INR;
-      map[s.item_id].profit += s.profit_INR;
+      map[s.item_id].revenue += s.converted_price_USD;
+      map[s.item_id].profit += s.profit_USD;
       map[s.item_id].qty += s.quantity;
     });
     return Object.entries(map)
@@ -104,8 +104,8 @@ export default function Finance() {
         const d = new Date(s.timestamp);
         return d.getFullYear() === m.year && d.getMonth() === m.month;
       });
-      const revenue = mSales.reduce((s, x) => s + x.converted_price_INR, 0);
-      const profit = mSales.reduce((s, x) => s + x.profit_INR, 0);
+      const revenue = mSales.reduce((s, x) => s + x.converted_price_USD, 0);
+      const profit = mSales.reduce((s, x) => s + x.profit_USD, 0);
       return { ...m, revenue, profit };
     });
   }, [sales]);

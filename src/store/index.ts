@@ -34,7 +34,7 @@ export interface Item {
   sku: string;
   min_stock_limit: number;
   retail_price?: number; 
-  avg_cost_INR?: number; 
+  avg_cost_USD?: number; 
 }
 
 export interface InventoryEntry {
@@ -47,7 +47,7 @@ export interface InventoryEntry {
   supplied_balance: number;
   returned_balance: number;
   last_rollover_date?: string; // YYYY-MM-DD
-  avg_cost_INR: number;
+  avg_cost_USD: number;
 }
 
 export interface Container {
@@ -56,9 +56,10 @@ export interface Container {
   source_country: string;
   total_cost: number;
   currency: string;
-  converted_cost_INR: number;
+  converted_cost_USD: number;
   date: string;
   notes?: string;
+  status?: 'Pending' | 'Received';
 }
 
 export type TransactionType = 'stock_entry' | 'transfer' | 'sale' | 'return';
@@ -73,7 +74,7 @@ export interface Transaction {
   quantity: number;
   unit_cost: number;
   currency: string;
-  converted_value_INR: number;
+  converted_value_USD: number;
   performed_by: string;
   timestamp: string;
   container_id?: string;
@@ -87,9 +88,9 @@ export interface Sale {
   quantity: number;
   selling_price: number;
   currency: string;
-  converted_price_INR: number;
-  avg_cost_INR: number;
-  profit_INR: number;
+  converted_price_USD: number;
+  avg_cost_USD: number;
+  profit_USD: number;
   sold_by: string;
   timestamp: string;
 }
@@ -105,6 +106,7 @@ export interface ReturnRecord {
   status: 'Restocked' | 'Disposed';
   timestamp: string;
   ref_transaction_id?: string;
+  image_proof?: string;
 }
 
 export interface AppNotification {
@@ -125,7 +127,7 @@ export interface ShopExpense {
   location_type: 'warehouse' | 'shop'; // FIX: Track whether expense is for warehouse or shop
   amount: number;
   currency: string;
-  converted_amount_INR: number;
+  converted_amount_USD: number;
   category: string;
   date: string;
   notes?: string;
@@ -134,9 +136,33 @@ export interface ShopExpense {
 export interface ShopTarget {
   id: string;
   location_id: string;
-  target_amount_INR: number;
+  target_amount_USD: number;
   month: string; // YYYY-MM
 }
+
+export interface ImportSessionItem {
+  item_id: string;
+  item_name: string;
+  sku: string;
+  brand: string;
+  invoiceQty: number;   // what was in the Excel/invoice
+  receivedQty: number;  // what was actually committed to inventory
+  unitCost: number;
+  retailPrice: number;
+}
+
+export interface ImportSession {
+  id: string;
+  date: string;            // ISO timestamp
+  fileName: string;        // original file name
+  location_id: string;     // target warehouse
+  currency: string;
+  itemCount: number;
+  totalItems: number;      // total qty
+  items: ImportSessionItem[];
+  status: 'confirmed';     // only confirmed imports are stored
+}
+
 
 export interface User {
   id: string;
@@ -150,7 +176,11 @@ export interface User {
 // ─── Exchange Rates (Dynamic, loaded from Firebase) ────────────────────────
 export const EXCHANGE_RATES: Record<string, number> = { ...DEFAULT_EXCHANGE_RATES };
 
-export const CURRENCIES = Object.keys(EXCHANGE_RATES).sort();
+export const CURRENCIES = [
+  'USD',
+  'ZMW',
+  ...Object.keys(EXCHANGE_RATES).filter(c => c !== 'USD' && c !== 'ZMW').sort()
+];
 
 /**
  * Recursively remove all `undefined` values from an object before writing to Firestore.
@@ -171,7 +201,7 @@ export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
 }
 
 export const COUNTRIES = [
-  { name: 'India', currency: 'INR' },
+  { name: 'India', currency: 'USD' },
   { name: 'Zambia', currency: 'ZMW' },
   { name: 'China', currency: 'CNY' },
   { name: 'Pakistan', currency: 'PKR' },
@@ -184,14 +214,14 @@ export const COUNTRIES = [
   { name: 'Qatar', currency: 'QAR' },
 ];
 
-export function toINR(amount: number, currency: string): number {
+export function toUSD(amount: number, currency: string): number {
   return amount * (EXCHANGE_RATES[currency] ?? 1);
 }
 
-export function formatCurrency(amount: number | null | undefined, currency: string = 'INR'): string {
+export function formatCurrency(amount: number | null | undefined, currency: string = 'USD'): string {
   if (amount === null || amount === undefined) return '—';
   const symbols: Record<string, string> = {
-    INR: '₹', USD: '$', EUR: '€', GBP: '£', PKR: '₨', CNY: '¥',
+    INR: '$', USD: '$', EUR: '€', GBP: '£', PKR: '₨', CNY: '¥',
     SAR: '﷼', AED: 'د.إ', JPY: '¥', CAD: 'C$', AUD: 'A$', SGD: 'S$',
     KWD: 'د.ك', OMR: 'ر.ع.', BHD: '.د.ب', QAR: 'ر.ق', MYR: 'RM', THB: '฿',
     ZMW: 'K',
@@ -200,12 +230,12 @@ export function formatCurrency(amount: number | null | undefined, currency: stri
 }
 
 /**
- * Returns a string like "SAR 100 (₹2,220)"
+ * Returns a string like "SAR 100 ($2,220)"
  */
 export function formatDualCurrency(amount: number, currency: string): string {
-  if (currency === 'INR') return formatCurrency(amount, 'INR');
-  const inrValue = toINR(amount, currency);
-  return `${formatCurrency(amount, currency)} (${formatCurrency(inrValue, 'INR')})`;
+  if (currency === 'USD') return formatCurrency(amount, 'USD');
+  const inrValue = toUSD(amount, currency);
+  return `${formatCurrency(amount, currency)} (${formatCurrency(inrValue, 'USD')})`;
 }
 
 // ─── Notification Helper Functions ───────────────────────────────────────────
@@ -248,8 +278,26 @@ interface AppState {
   users: User[];
   expenses: ShopExpense[];
   targets: ShopTarget[];
+  importSessions: ImportSession[];
   isSyncing: boolean;
   exchangeRates: Record<string, number>;
+
+  setImportSessions: (d: ImportSession[]) => void;
+  saveImportSession: (session: Omit<ImportSession, 'id'>) => Promise<string>;
+  deleteImportSession: (id: string) => Promise<void>;
+  fixImportStock: (sessionId: string, fixes: { item_id: string; newQty: number; location_id: string }[]) => Promise<void>;
+
+
+  // Global Modals State
+  isTransferModalOpen: boolean;
+  isTransferModalMinimized: boolean;
+  transferForm: { from_location: string; to_location: string };
+  transferItems: { brand_id: string; item_id: string; quantity: number; _id: number }[];
+  
+  isRecordSaleModalOpen: boolean;
+  isRecordSaleModalMinimized: boolean;
+  recordSaleLocation: string;
+  recordSaleItems: { brand_id: string; item_id: string; quantity: number; selling_price: number; currency: string; _id: number }[];
 
   // Setters (called by Firestore listeners)
   setLocations: (d: Location[]) => void;
@@ -265,6 +313,54 @@ interface AppState {
   setExchangeRates: (d: Record<string, number>) => void;
   setIsSyncing: (v: boolean) => void;
 
+  setTransferModalOpen: (v: boolean) => void;
+  setTransferModalMinimized: (v: boolean) => void;
+  setTransferForm: (f: { from_location: string; to_location: string }) => void;
+  setTransferItems: (items: any[]) => void;
+
+  setRecordSaleModalOpen: (v: boolean) => void;
+  setRecordSaleModalMinimized: (v: boolean) => void;
+  setRecordSaleLocation: (v: string) => void;
+  setRecordSaleItems: (items: any[]) => void;
+
+  isReturnModalOpen: boolean;
+  isReturnModalMinimized: boolean;
+  returnActionState: string;
+  returnTypeState: string;
+  returnFormState: {
+    location_id: string;
+    brand_id: string;
+    item_id: string;
+    quantity: number;
+    notes: string;
+    image_proof?: string;
+  };
+  setReturnModalOpen: (v: boolean) => void;
+  setReturnModalMinimized: (v: boolean) => void;
+  setReturnActionState: (v: string) => void;
+  setReturnTypeState: (v: string) => void;
+  setReturnFormState: (f: any) => void;
+
+  isImportModalOpen: boolean;
+  isImportModalMinimized: boolean;
+  importPreview: any[];
+  importTargetLocation: string;
+  importCurrency: string;
+  importExcelFileName: string | null;
+  importProcessingStatus: string;
+  importProgress: number;
+  importSaving: boolean;
+
+  setImportModalOpen: (v: boolean) => void;
+  setImportModalMinimized: (v: boolean) => void;
+  setImportPreview: (v: any[] | ((prev: any[]) => any[])) => void;
+  setImportTargetLocation: (v: string) => void;
+  setImportCurrency: (v: string) => void;
+  setImportExcelFileName: (v: string | null) => void;
+  setImportProcessingStatus: (v: string) => void;
+  setImportProgress: (v: number) => void;
+  setImportSaving: (v: boolean) => void;
+
   // Actions
   deleteStockEntry: (id: string) => Promise<void>;
   deleteStockEntries: (ids: string[]) => Promise<void>;
@@ -278,6 +374,7 @@ interface AppState {
   deleteItem: (id: string) => Promise<void>;
 
   addContainer: (container: Omit<Container, 'id'>) => Promise<string>;
+  adjustInvoiceStock: (container_id: string, updates: { transaction_id: string; new_quantity: number }[]) => Promise<void>;
 
   // Stock entry: add items from a container into a warehouse
   stockEntry: (params: {
@@ -293,7 +390,7 @@ interface AppState {
 
   // Batch stock entry for faster processing
   batchStockEntry: (items: {
-    container_id: string;
+    container_id?: string;
     location_id: string;
     item_id: string;
     item_name: string;
@@ -301,7 +398,7 @@ interface AppState {
     unit_cost: number;
     currency: string;
     is_absolute_override?: boolean;
-  }[], performed_by: string) => Promise<void>;
+  }[], performed_by: string, options?: { skipNotifications?: boolean; isPending?: boolean }) => Promise<void>;
 
   // Transfer between locations
   transfer: (params: {
@@ -310,7 +407,7 @@ interface AppState {
     item_id: string;
     item_name: string;
     quantity: number;
-    unit_cost_INR: number;
+    unit_cost_USD: number;
     performed_by: string;
   }) => Promise<void>;
 
@@ -377,8 +474,49 @@ export const useStore = create<AppState>((set, get) => ({
   users: [],
   expenses: [],
   targets: [],
+  importSessions: [],
   isSyncing: false,
   exchangeRates: { ...DEFAULT_EXCHANGE_RATES },
+
+  setImportSessions: (d) => set({ importSessions: d }),
+
+  saveImportSession: async (session) => {
+    const id = `imp-${Date.now()}`;
+    const full: ImportSession = { id, ...session };
+    await setDoc(doc(db, 'import_sessions', id), full);
+    return id;
+  },
+
+  deleteImportSession: async (id) => {
+    await deleteDoc(doc(db, 'import_sessions', id));
+  },
+
+  fixImportStock: async (sessionId, fixes) => {
+    const batch = writeBatch(db);
+    const { inventory } = get();
+    for (const fix of fixes) {
+      const safeLocId = fix.location_id.replace(/\//g, '-');
+      const safeItemId = fix.item_id.replace(/\//g, '-');
+      const invId = `${safeLocId}_${safeItemId}`;
+      const existing = inventory.find(e => e.id === invId);
+      batch.set(doc(db, 'inventory', invId), {
+        id: invId,
+        location_id: fix.location_id,
+        item_id: fix.item_id,
+        quantity: fix.newQty,
+        opening_balance: existing?.opening_balance ?? fix.newQty,
+        received_balance: existing?.received_balance ?? 0,
+        supplied_balance: existing?.supplied_balance ?? 0,
+        returned_balance: existing?.returned_balance ?? 0,
+        avg_cost_USD: existing?.avg_cost_USD ?? 0,
+        last_import_timestamp: new Date().toISOString(),
+        last_fix_timestamp: new Date().toISOString(),
+        fixed_from_session: sessionId,
+      });
+    }
+    await batch.commit();
+  },
+
 
   setLocations: (d) => set({ locations: d }),
   setBrands: (d) => set({ brands: d }),
@@ -392,8 +530,67 @@ export const useStore = create<AppState>((set, get) => ({
   setUsers: (d) => set({ users: d }),
   setExpenses: (d) => set({ expenses: d }),
   setTargets: (d) => set({ targets: d }),
+
+  isTransferModalOpen: false,
+  isTransferModalMinimized: false,
+  transferForm: { from_location: '', to_location: '' },
+  transferItems: [{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }],
+  
+  isRecordSaleModalOpen: false,
+  isRecordSaleModalMinimized: false,
+  recordSaleLocation: '',
+  recordSaleItems: [{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'USD', _id: Date.now() }],
+
+  setTransferModalOpen: (v) => set({ isTransferModalOpen: v }),
+  setTransferModalMinimized: (v) => set({ isTransferModalMinimized: v }),
+  setTransferForm: (f) => set({ transferForm: f }),
+  setTransferItems: (items) => set({ transferItems: items }),
+
+  setRecordSaleModalOpen: (v) => set({ isRecordSaleModalOpen: v }),
+  setRecordSaleModalMinimized: (v) => set({ isRecordSaleModalMinimized: v }),
+  setRecordSaleLocation: (v) => set({ recordSaleLocation: v }),
+  setRecordSaleItems: (items) => set({ recordSaleItems: items }),
+
+  isReturnModalOpen: false,
+  isReturnModalMinimized: false,
+  returnActionState: 'Restocked',
+  returnTypeState: 'sale_return',
+  returnFormState: {
+    location_id: '',
+    brand_id: '',
+    item_id: '',
+    quantity: 1,
+    notes: '',
+    image_proof: ''
+  },
+  setReturnModalOpen: (v) => set({ isReturnModalOpen: v }),
+  setReturnModalMinimized: (v) => set({ isReturnModalMinimized: v }),
+  setReturnActionState: (v) => set({ returnActionState: v }),
+  setReturnTypeState: (v) => set({ returnTypeState: v }),
+  setReturnFormState: (f) => set({ returnFormState: typeof f === 'function' ? f(get().returnFormState) : f }),
+
+  isImportModalOpen: false,
+  isImportModalMinimized: false,
+  importPreview: [],
+  importTargetLocation: '',
+  importCurrency: 'USD',
+  importExcelFileName: null,
+  importProcessingStatus: '',
+  importProgress: 0,
+  importSaving: false,
+
+  setImportModalOpen: (v) => set({ isImportModalOpen: v }),
+  setImportModalMinimized: (v) => set({ isImportModalMinimized: v }),
+  setImportPreview: (v) => set({ importPreview: typeof v === 'function' ? v(get().importPreview) : v }),
+  setImportTargetLocation: (v) => set({ importTargetLocation: v }),
+  setImportCurrency: (v) => set({ importCurrency: v }),
+  setImportExcelFileName: (v) => set({ importExcelFileName: v }),
+  setImportProcessingStatus: (v) => set({ importProcessingStatus: v }),
+  setImportProgress: (v) => set({ importProgress: v }),
+  setImportSaving: (v) => set({ importSaving: v }),
+
   setExchangeRates: (d) => {
-    // Merge remote rates with defaults to ensure keys like 'INR' (1) are always present
+    // Merge remote rates with defaults to ensure keys like 'USD' (1) are always present
     const merged = { ...DEFAULT_EXCHANGE_RATES, ...d };
     set({ exchangeRates: merged });
     
@@ -635,6 +832,47 @@ export const useStore = create<AppState>((set, get) => ({
     await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...container }));
     return ref.id; // Return ID for chaining
   },
+  adjustInvoiceStock: async (container_id: string, updates: { transaction_id: string; new_quantity: number }[]) => {
+    const st = get();
+    const batch = writeBatch(db);
+    
+    const container = st.containers.find(c => c.id === container_id);
+    const isPending = container?.status === 'Pending';
+
+    if (isPending) {
+      batch.update(doc(db, 'containers', container_id), { status: 'Received' });
+    }
+
+    for (const update of updates) {
+      const tx = st.transactions.find(t => t.id === update.transaction_id);
+      if (!tx || tx.type !== 'stock_entry') continue;
+      
+      const discrepancy = update.new_quantity - tx.quantity;
+      if (discrepancy === 0 && !isPending) continue;
+      
+      // Update transaction
+      const newConvertedValue = update.new_quantity * tx.unit_cost;
+      batch.update(doc(db, 'transactions', tx.id), {
+        quantity: update.new_quantity,
+        converted_value_USD: newConvertedValue
+      });
+      
+      // Update inventory
+      const invId = `${tx.to_location}_${tx.item_id}`;
+      const inv = st.inventory.find(i => i.id === invId);
+      
+      const qtyToAdd = isPending ? update.new_quantity : discrepancy;
+
+      if (inv) {
+        batch.update(doc(db, 'inventory', invId), {
+          quantity: inv.quantity + qtyToAdd,
+          received_balance: (inv.received_balance || 0) + qtyToAdd
+        });
+      }
+    }
+    
+    await batch.commit();
+  },
   deleteContainers: async (ids: string[]) => {
     const batch = writeBatch(db);
     ids.forEach(id => batch.delete(doc(db, 'containers', id)));
@@ -645,7 +883,7 @@ export const useStore = create<AppState>((set, get) => ({
   stockEntry: async (params) => {
     return get().batchStockEntry([params], params.performed_by);
   },
-  batchStockEntry: async (items_to_process, performed_by, { skipNotifications = false } = {}) => {
+  batchStockEntry: async (items_to_process, performed_by, { skipNotifications = false, isPending = false } = {}) => {
     // Prebuild global inventory map for O(1) lookups
     const inventorySnapshot = new Map(get().inventory.map(e => [`${e.location_id.replace(/\//g, '-')}_${e.item_id.replace(/\//g, '-')}`, e]));
     const locationsMap = new Map(get().locations.map(l => [l.id, l]));
@@ -661,11 +899,11 @@ export const useStore = create<AppState>((set, get) => ({
     for (let i = 0; i < items_to_process.length; i += CHUNK_SIZE) {
       const chunk = items_to_process.slice(i, i + CHUNK_SIZE);
       const batch = writeBatch(db);
-      const pendingInventory = new Map<string, { quantity: number; avg_cost_INR: number }>();
+      const pendingInventory = new Map<string, { quantity: number; avg_cost_USD: number }>();
 
       for (const params of chunk) {
         const { container_id, location_id, item_id, item_name, quantity, unit_cost, currency, is_absolute_override } = params;
-        const avgCostINR = toINR(unit_cost, currency);
+        const avgCostINR = toUSD(unit_cost, currency);
 
         const safeLocId = location_id.replace(/\//g, '-');
         const safeItemId = item_id.replace(/\//g, '-');
@@ -675,33 +913,34 @@ export const useStore = create<AppState>((set, get) => ({
         if (!currentInv) {
           const existing = inventorySnapshot.get(invId);
           currentInv = existing
-            ? { quantity: existing.quantity, avg_cost_INR: existing.avg_cost_INR }
-            : { quantity: 0, avg_cost_INR: 0 };
+            ? { quantity: existing.quantity, avg_cost_USD: existing.avg_cost_USD }
+            : { quantity: 0, avg_cost_USD: 0 };
         }
 
         const deltaQty = is_absolute_override
           ? Math.max(0, quantity - currentInv.quantity)
           : quantity;
-        const newQty = is_absolute_override ? quantity : currentInv.quantity + deltaQty;
+        const deltaToApply = isPending ? 0 : deltaQty;
+        const newQty = is_absolute_override ? (isPending ? currentInv.quantity : quantity) : currentInv.quantity + deltaToApply;
 
-        let newAvg = currentInv.avg_cost_INR;
+        let newAvg = currentInv.avg_cost_USD;
         if (!is_absolute_override) {
-          newAvg = currentInv.quantity > 0 || deltaQty > 0
-            ? (currentInv.avg_cost_INR * currentInv.quantity + avgCostINR * deltaQty) / newQty
+          newAvg = currentInv.quantity > 0 || deltaToApply > 0
+            ? (currentInv.avg_cost_USD * currentInv.quantity + avgCostINR * deltaToApply) / newQty
             : avgCostINR;
         } else if (avgCostINR > 0) {
           newAvg = avgCostINR;
         }
 
         const safeQty = Math.round(newQty);
-        pendingInventory.set(invId, { quantity: safeQty, avg_cost_INR: newAvg });
+        pendingInventory.set(invId, { quantity: safeQty, avg_cost_USD: newAvg });
 
         const currentDay = new Date().toISOString().split('T')[0];
 
         batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({
-          id: invId, location_id, item_id, quantity: safeQty, avg_cost_INR: newAvg,
+          id: invId, location_id, item_id, quantity: safeQty, avg_cost_USD: newAvg,
           opening_balance: currentInv.quantity, // Closing becomes Opening
-          received_balance: deltaQty,
+          received_balance: deltaToApply,
           supplied_balance: 0,
           returned_balance: 0,
           last_rollover_date: currentDay
@@ -713,7 +952,7 @@ export const useStore = create<AppState>((set, get) => ({
             id: txRef.id, type: 'stock_entry',
             from_location: 'supplier', to_location: location_id,
             item_id, item_name, quantity: deltaQty, unit_cost, currency,
-            converted_value_INR: toINR(unit_cost * Math.abs(deltaQty), currency),
+            converted_value_USD: toUSD(unit_cost * Math.abs(deltaQty), currency),
             performed_by, container_id: container_id || null,
             notes: is_absolute_override ? 'Stock level override (Import)' : null,
             timestamp: new Date().toISOString(),
@@ -761,7 +1000,7 @@ export const useStore = create<AppState>((set, get) => ({
 
 
   // ── Transfer ───────────────────────────────────────────────────────────────
-  transfer: async ({ from_location, to_location, item_id, item_name, quantity, unit_cost_INR, performed_by }) => {
+  transfer: async ({ from_location, to_location, item_id, item_name, quantity, unit_cost_USD, performed_by }) => {
     // FIX: Use transaction locks on both source and destination to prevent race conditions
     const fromLock = `inventory_${from_location}_${item_id}`;
     const toLock = `inventory_${to_location}_${item_id}`;
@@ -780,8 +1019,8 @@ export const useStore = create<AppState>((set, get) => ({
         const newFromQty = Math.round(fromEntry.quantity - quantity);
         const toQty = Math.round((toEntry?.quantity ?? 0) + quantity);
         const toAvg = toEntry
-          ? (toEntry.avg_cost_INR * toEntry.quantity + unit_cost_INR * quantity) / toQty
-          : unit_cost_INR;
+          ? (toEntry.avg_cost_USD * toEntry.quantity + unit_cost_USD * quantity) / toQty
+          : unit_cost_USD;
 
         const currentDay = new Date().toISOString().split('T')[0];
 
@@ -800,11 +1039,11 @@ export const useStore = create<AppState>((set, get) => ({
               ...toEntry,
               quantity: toQty,
               received_balance: (toEntry.received_balance || 0) + quantity,
-              avg_cost_INR: toAvg
+              avg_cost_USD: toAvg
             }
           : {
               id: toId, location_id: to_location, item_id,
-              quantity: toQty, avg_cost_INR: toAvg,
+              quantity: toQty, avg_cost_USD: toAvg,
               opening_balance: 0, received_balance: quantity,
               supplied_balance: 0, returned_balance: 0,
               last_rollover_date: currentDay
@@ -815,8 +1054,8 @@ export const useStore = create<AppState>((set, get) => ({
         batch.set(txRef, {
           id: txRef.id, type: 'transfer',
           from_location, to_location, item_id, item_name, quantity,
-          unit_cost: unit_cost_INR, currency: 'INR',
-          converted_value_INR: unit_cost_INR * quantity,
+          unit_cost: unit_cost_USD, currency: 'USD',
+          converted_value_USD: unit_cost_USD * quantity,
           performed_by,
           timestamp: new Date().toISOString(),
         });
@@ -902,14 +1141,14 @@ export const useStore = create<AppState>((set, get) => ({
         last_rollover_date: invEntry.last_rollover_date || currentDay
       }));
 
-      const convertedPriceINR = toINR(selling_price * quantity, currency);
-      const profitINR = convertedPriceINR - invEntry.avg_cost_INR * quantity;
+      const convertedPriceINR = toUSD(selling_price * quantity, currency);
+      const profitINR = convertedPriceINR - invEntry.avg_cost_USD * quantity;
 
       const saleRef = doc(collection(db, 'sales'));
       batch.set(saleRef, {
         id: saleRef.id, item_id, item_name, location_id, quantity,
-        selling_price, currency, converted_price_INR: convertedPriceINR,
-        avg_cost_INR: invEntry.avg_cost_INR, profit_INR: profitINR,
+        selling_price, currency, converted_price_USD: convertedPriceINR,
+        avg_cost_USD: invEntry.avg_cost_USD, profit_USD: profitINR,
         sold_by, timestamp: new Date().toISOString(),
       });
 
@@ -918,7 +1157,7 @@ export const useStore = create<AppState>((set, get) => ({
         id: txRef.id, type: 'sale',
         from_location: location_id, to_location: 'customer',
         item_id, item_name, quantity, unit_cost: selling_price, currency,
-        converted_value_INR: convertedPriceINR, performed_by: sold_by,
+        converted_value_USD: convertedPriceINR, performed_by: sold_by,
         timestamp: new Date().toISOString(),
       });
 
@@ -989,7 +1228,7 @@ export const useStore = create<AppState>((set, get) => ({
         } else {
           batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({ 
             id: invId, location_id: ret.location_id, item_id: ret.item_id, 
-            quantity: newQty, avg_cost_INR: 0,
+            quantity: newQty, avg_cost_USD: 0,
             opening_balance: 0, received_balance: 0, supplied_balance: 0,
             returned_balance: ret.quantity, last_rollover_date: currentDay
           }));
@@ -998,7 +1237,7 @@ export const useStore = create<AppState>((set, get) => ({
 
       // FIX: Record the cost impact of the return properly
       const refSale = get().sales.find(s => s.id === ret.ref_transaction_id);
-      const returnCostINR = refSale ? refSale.avg_cost_INR * ret.quantity : 0;
+      const returnCostINR = refSale ? refSale.avg_cost_USD * ret.quantity : 0;
 
       const txRef = doc(collection(db, 'transactions'));
       batch.set(txRef, {
@@ -1006,7 +1245,7 @@ export const useStore = create<AppState>((set, get) => ({
         from_location: ret.type === 'warehouse_return' ? 'shop' : 'customer',
         to_location: ret.location_id,
         item_id: ret.item_id, item_name: ret.item_name, quantity: ret.quantity,
-        unit_cost: returnCostINR, currency: 'INR', converted_value_INR: returnCostINR * ret.quantity,
+        unit_cost: returnCostINR, currency: 'USD', converted_value_USD: returnCostINR * ret.quantity,
         performed_by: 'system',
         timestamp: new Date().toISOString(),
       });
@@ -1059,7 +1298,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ isSyncing: true });
     
     let loadedCollections = 0;
-    const totalCollections = 13;
+    const totalCollections = 14;
     
     const checkSyncComplete = () => {
       loadedCollections++;
@@ -1133,6 +1372,10 @@ export const useStore = create<AppState>((set, get) => ({
     onSnapshot(collection(db, 'targets'), {
       next: snap => { set({ targets: snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopTarget)) }); checkSyncComplete(); },
       error: err => logError('targets', err)
+    });
+    onSnapshot(query(collection(db, 'import_sessions'), orderBy('date', 'desc')), {
+      next: snap => { set({ importSessions: snap.docs.map(d => ({ id: d.id, ...d.data() } as ImportSession)) }); checkSyncComplete(); },
+      error: err => logError('import_sessions', err)
     });
   },
 }));

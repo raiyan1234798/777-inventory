@@ -21,6 +21,10 @@ import {
 import clsx from 'clsx';
 import { useAuthStore } from '../store/authStore';
 import { useStore } from '../store';
+import GlobalTransferModal from './GlobalTransferModal';
+import GlobalRecordSaleModal from './GlobalRecordSaleModal';
+import GlobalReturnModal from './GlobalReturnModal';
+import GlobalImportModal from './GlobalImportModal';
 
 const navItems = [
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, group: 'CORE' },
@@ -167,7 +171,7 @@ export default function Layout() {
               Live Sync
             </div>
             <div className="hidden sm:flex items-center gap-1.5 bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold px-3 py-1.5 rounded-full">
-              Base: ₹ INR
+              Base: $ USD
             </div>
             <Link to="/notifications" className="relative text-gray-400 hover:text-gray-700 p-2 rounded-lg hover:bg-gray-50 transition-colors">
               <Bell className="w-5 h-5" />
@@ -187,6 +191,11 @@ export default function Layout() {
           </div>
         </div>
       </main>
+
+      <GlobalTransferModal />
+      <GlobalRecordSaleModal />
+      <GlobalReturnModal />
+      <GlobalImportModal />
     </div>
   );
 }

@@ -49,10 +49,10 @@ export class DataExporter {
       'Item Name': s.item_name || 'Unknown',
       'Quantity': s.quantity || 0,
       'Unit Price': s.selling_price || 0,
-      'Currency': s.currency || 'INR',
-      'Total Revenue (INR)': s.converted_price_INR || 0,
-      'Cost (INR)': (s.avg_cost_INR || 0) * (s.quantity || 0),
-      'Profit (INR)': s.profit_INR || 0,
+      'Currency': s.currency || 'USD',
+      'Total Revenue (INR)': s.converted_price_USD || 0,
+      'Cost (INR)': (s.avg_cost_USD || 0) * (s.quantity || 0),
+      'Profit (INR)': s.profit_USD || 0,
       'Sold By': s.sold_by || 'Unknown',
       'Date': s.timestamp ? format(new Date(s.timestamp), 'MMM dd, yyyy HH:mm') : '—',
       'Location': locations.find(l => l.id === s.location_id)?.name || s.location_id || 'Unknown'
@@ -84,8 +84,8 @@ export class DataExporter {
         'SKU': item?.sku || '-',
         'Category': item?.category || '-',
         'Quantity': inv.quantity || 0,
-        'Unit Cost (INR)': inv.avg_cost_INR || 0,
-        'Total Value (INR)': (inv.quantity || 0) * (inv.avg_cost_INR || 0),
+        'Unit Cost (INR)': inv.avg_cost_USD || 0,
+        'Total Value (INR)': (inv.quantity || 0) * (inv.avg_cost_USD || 0),
         'Retail Price': item?.retail_price || 0,
         'Location': location?.name || inv.location_id || 'Unknown',
         'Status': (inv.quantity || 0) < (item?.min_stock_limit || 0) ? 'Low Stock' : 'OK'
@@ -154,8 +154,8 @@ export class DataExporter {
       return {
         'Category': exp.category || 'General',
         'Description': exp.description || '',
-        'Amount (INR)': exp.amount_INR || exp.amount || 0,
-        'Currency': exp.currency || 'INR',
+        'Amount (INR)': exp.amount_USD || exp.amount || 0,
+        'Currency': exp.currency || 'USD',
         'Location': location?.name || exp.location_id || 'Unknown',
         'Location Type': exp.location_type || location?.type || '',
         'Date': exp.date ? format(new Date(exp.date), 'MMM dd, yyyy') : '—',
@@ -189,7 +189,7 @@ export class DataExporter {
         'Item Name': transfer.item_name || 'Unknown',
         'Quantity': transfer.quantity || 0,
         'Unit Cost (INR)': transfer.unit_cost || 0,
-        'Total Value (INR)': transfer.converted_value_INR || 0,
+        'Total Value (INR)': transfer.converted_value_USD || 0,
         'From Location': fromLoc?.name || transfer.from_location || 'Supplier',
         'To Location': toLoc?.name || transfer.to_location || 'Warehouse',
         'Performed By': transfer.performed_by || 'Admin',
@@ -212,9 +212,9 @@ export class DataExporter {
       const locInv = (inventory || []).filter(i => i.location_id === location.id);
       const locReturns = (returns || []).filter(r => r.location_id === location.id);
       
-      const totalRevenue = locSales.reduce((sum, s) => sum + (s.converted_price_INR || 0), 0);
-      const totalProfit = locSales.reduce((sum, s) => sum + (s.profit_INR || 0), 0);
-      const totalStockValue = locInv.reduce((sum, i) => sum + (i.quantity || 0) * (i.avg_cost_INR || 0), 0);
+      const totalRevenue = locSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
+      const totalProfit = locSales.reduce((sum, s) => sum + (s.profit_USD || 0), 0);
+      const totalStockValue = locInv.reduce((sum, i) => sum + (i.quantity || 0) * (i.avg_cost_USD || 0), 0);
       const totalItems = locInv.reduce((sum, i) => sum + (i.quantity || 0), 0);
       
       return {

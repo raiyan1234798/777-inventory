@@ -20,25 +20,25 @@ export interface ExchangeRateRecord {
  * These are approximate and should be updated regularly
  */
 export const DEFAULT_EXCHANGE_RATES: Record<string, number> = {
-  INR: 1,
-  USD: 83.5,
-  EUR: 90.2,
-  GBP: 105.8,
-  CNY: 11.5,
-  PKR: 0.30,
-  SAR: 22.2,
-  AED: 22.7,
-  JPY: 0.55,
-  CAD: 61.5,
-  AUD: 54.8,
-  SGD: 61.9,
-  KWD: 271.5,
-  OMR: 216.8,
-  BHD: 221.4,
-  QAR: 22.9,
-  MYR: 17.6,
-  THB: 2.3,
-  ZMW: 3.2,     // Zambian Kwacha — 1 ZMW ≈ 3.2 INR
+  USD: 1,
+  ZMW: 26.5,    // Zambian Kwacha
+  INR: 83.5,
+  EUR: 0.92,
+  GBP: 0.79,
+  CNY: 7.23,
+  PKR: 278.5,
+  SAR: 3.75,
+  AED: 3.67,
+  JPY: 153.5,
+  CAD: 1.37,
+  AUD: 1.51,
+  SGD: 1.35,
+  KWD: 0.31,
+  OMR: 0.38,
+  BHD: 0.38,
+  QAR: 3.64,
+  MYR: 4.74,
+  THB: 36.8,
 };
 
 class ExchangeRateManager {
@@ -170,7 +170,7 @@ export const exchangeRateManager = new ExchangeRateManager();
  * Utility function to convert amount to INR
  * Uses the exchange rate manager
  */
-export function toINR(amount: number, currency: string): number {
+export function toUSD(amount: number, currency: string): number {
   return amount * exchangeRateManager.getRate(currency);
 }
 
@@ -192,7 +192,7 @@ export function convertCurrency(
 ): number {
   if (fromCurrency === toCurrency) return amount;
   
-  const amountINR = toINR(amount, fromCurrency);
+  const amountINR = toUSD(amount, fromCurrency);
   return fromINR(amountINR, toCurrency);
 }
 

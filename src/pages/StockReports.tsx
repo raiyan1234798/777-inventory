@@ -159,7 +159,7 @@ export default function StockReports() {
     .filter(inv => selectedBrand === 'all' || itemsMap.get(inv.item_id)?.brand_id === selectedBrand)
     .reduce((sum, inv) => {
       const item = itemsMap.get(inv.item_id);
-      const unitCost = inv.avg_cost_INR || item?.avg_cost_INR || 0;
+      const unitCost = inv.avg_cost_USD || item?.avg_cost_USD || 0;
       return sum + (Math.round(inv.quantity || 0) * unitCost);
     }, 0);
 
@@ -328,7 +328,7 @@ export default function StockReports() {
         </div>
         <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 col-span-2 lg:col-span-1">
           <p className="text-[10px] font-bold text-purple-600 uppercase mb-1">Total Stock Value</p>
-          <p className="text-xl font-black text-purple-900">₹{inventoryValue.toLocaleString('en-IN')}</p>
+          <p className="text-xl font-black text-purple-900">${inventoryValue.toLocaleString('en-IN')}</p>
         </div>
       </div>
 

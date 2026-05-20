@@ -30,8 +30,8 @@ export default function Reports() {
   const filteredSales = filterByLocation(filterByDateRange(sales, 'timestamp'), 'location_id');
 
   // Calculate totals
-  const salesTotal = filteredSales.reduce((sum, s) => sum + (s.converted_price_INR || 0), 0);
-  const salesRevenue = filteredSales.reduce((sum, s) => sum + (s.converted_price_INR || 0), 0);
+  const salesTotal = filteredSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
+  const salesRevenue = filteredSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -142,16 +142,16 @@ export default function Reports() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
             <p className="text-xs font-bold text-blue-600 uppercase mb-1">Total Sales</p>
-            <p className="text-2xl font-black text-blue-900">₹{salesTotal.toLocaleString('en-IN')}</p>
+            <p className="text-2xl font-black text-blue-900">${salesTotal.toLocaleString('en-IN')}</p>
             <p className="text-xs text-blue-500 mt-1">{filteredSales.length} transactions</p>
           </div>
           <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4">
             <p className="text-xs font-bold text-emerald-600 uppercase mb-1">Revenue</p>
-            <p className="text-2xl font-black text-emerald-900">₹{salesRevenue.toLocaleString('en-IN')}</p>
+            <p className="text-2xl font-black text-emerald-900">${salesRevenue.toLocaleString('en-IN')}</p>
           </div>
           <div className="bg-purple-50 border border-purple-100 rounded-xl p-4">
             <p className="text-xs font-bold text-purple-600 uppercase mb-1">Avg Sale</p>
-            <p className="text-2xl font-black text-purple-900">₹{(filteredSales.length > 0 ? salesTotal / filteredSales.length : 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+            <p className="text-2xl font-black text-purple-900">${(filteredSales.length > 0 ? salesTotal / filteredSales.length : 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
           </div>
           <div className="bg-orange-50 border border-orange-100 rounded-xl p-4">
             <p className="text-xs font-bold text-orange-600 uppercase mb-1">Items Sold</p>
@@ -180,8 +180,8 @@ export default function Reports() {
                     <tr key={idx} className="hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium text-gray-900">{sale.item_name}</td>
                       <td className="px-4 py-3 text-gray-600">{sale.quantity}</td>
-                      <td className="px-4 py-3 text-gray-600">₹{((sale.converted_price_INR || 0) / (sale.quantity || 1)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
-                      <td className="px-4 py-3 font-bold text-gray-900">₹{sale.converted_price_INR?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                      <td className="px-4 py-3 text-gray-600">${((sale.converted_price_USD || 0) / (sale.quantity || 1)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                      <td className="px-4 py-3 font-bold text-gray-900">${sale.converted_price_USD?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                       <td className="px-4 py-3 text-gray-600">{location?.name}</td>
                       <td className="px-4 py-3 text-gray-600">
                         {sale.timestamp ? new Date(sale.timestamp).toLocaleDateString('en-IN') : '—'}

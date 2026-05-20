@@ -43,9 +43,9 @@ export default function Dashboard() {
   }, [selectedItemId, drillDownType, inventory, items, locations]);
 
   const stats = useMemo(() => {
-    const totalInventoryValue = inventory.reduce((sum, entry) => sum + (Number(entry.quantity) || 0) * (Number(entry.avg_cost_INR) || 0), 0);
-    const totalProfit = sales.reduce((sum, s) => sum + (Number(s.profit_INR) || 0), 0);
-    const totalRevenue = sales.reduce((sum, s) => sum + (Number(s.converted_price_INR) || 0), 0);
+    const totalInventoryValue = inventory.reduce((sum, entry) => sum + (Number(entry.quantity) || 0) * (Number(entry.avg_cost_USD) || 0), 0);
+    const totalProfit = sales.reduce((sum, s) => sum + (Number(s.profit_USD) || 0), 0);
+    const totalRevenue = sales.reduce((sum, s) => sum + (Number(s.converted_price_USD) || 0), 0);
 
     const lowStockItems = items.filter(item => {
       const totalQty = inventory.filter(e => e.item_id === item.id).reduce((s, e) => s + e.quantity, 0);
@@ -90,7 +90,7 @@ export default function Dashboard() {
   // Target Achievement
   const currentMonth = format(new Date(), 'yyyy-MM');
   const monthTargets = targets.filter(t => t.month === currentMonth);
-  const totalTarget = monthTargets.reduce((sum, t) => sum + t.target_amount_INR, 0) || 1000000;
+  const totalTarget = monthTargets.reduce((sum, t) => sum + t.target_amount_USD, 0) || 1000000;
   const targetPct = Math.min(Math.round((stats.totalRevenue / totalTarget) * 100), 100);
 
   const recentTransactions = transactions.slice(0, 5);
@@ -98,7 +98,7 @@ export default function Dashboard() {
   const locationStats = useMemo(() => {
     return locations.map(loc => {
       const locInv = inventory.filter(e => e.location_id === loc.id);
-      const totalValue = locInv.reduce((s, e) => s + e.quantity * e.avg_cost_INR, 0);
+      const totalValue = locInv.reduce((s, e) => s + e.quantity * e.avg_cost_USD, 0);
       const totalQty = locInv.reduce((s, e) => s + e.quantity, 0);
       return { ...loc, totalValue, totalQty };
     }).sort((a, b) => b.totalValue - a.totalValue);

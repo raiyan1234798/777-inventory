@@ -7,7 +7,7 @@ import {
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { 
-  useStore, COUNTRIES, CURRENCIES, formatCurrency, toINR 
+  useStore, COUNTRIES, CURRENCIES, formatCurrency, toUSD 
 } from '../store';
 import { format } from 'date-fns';
 
@@ -29,17 +29,17 @@ export default function ManageShops() {
 
   // Forms
   const [locForm, setLocForm] = useState({
-    name: '', country: 'India', currency: 'INR',
+    name: '', country: 'Zambia', currency: 'USD',
     manager: '', contact: '', address: ''
   });
 
   const [expForm, setExpForm] = useState({
     location_id: '', category: 'Rent', amount: 0,
-    currency: 'INR', date: new Date().toISOString().split('T')[0], notes: ''
+    currency: 'USD', date: new Date().toISOString().split('T')[0], notes: ''
   });
 
   const [targetForm, setTargetForm] = useState({
-    location_id: '', target_amount_INR: 0, month: format(new Date(), 'yyyy-MM')
+    location_id: '', target_amount_USD: 0, month: format(new Date(), 'yyyy-MM')
   });
 
   // Shop Performance Analytics
@@ -50,17 +50,17 @@ export default function ManageShops() {
       const shopExpenses = expenses.filter(e => e.location_id === shop.id);
       const shopTarget = targets.find(t => t.location_id === shop.id && t.month === now);
       
-      const rev = shopSales.reduce((sum, s) => sum + s.converted_price_INR, 0);
-      const prof = shopSales.reduce((sum, s) => sum + s.profit_INR, 0);
-      const exp = shopExpenses.reduce((sum, e) => sum + e.converted_amount_INR, 0);
+      const rev = shopSales.reduce((sum, s) => sum + s.converted_price_USD, 0);
+      const prof = shopSales.reduce((sum, s) => sum + s.profit_USD, 0);
+      const exp = shopExpenses.reduce((sum, e) => sum + e.converted_amount_USD, 0);
       
       return {
         ...shop,
         revenue: rev,
         profit: prof - exp, // Net profit after expenses
         expenses: exp,
-        target: shopTarget?.target_amount_INR ?? 0,
-        progress: shopTarget ? (rev / shopTarget.target_amount_INR) * 100 : 0
+        target: shopTarget?.target_amount_USD ?? 0,
+        progress: shopTarget ? (rev / shopTarget.target_amount_USD) * 100 : 0
       };
     });
   }, [shops, sales, expenses, targets]);
@@ -76,7 +76,7 @@ export default function ManageShops() {
       }
       setIsLocModal(false);
       setEditingLoc(null);
-      setLocForm({ name: '', country: 'India', currency: 'INR', manager: '', contact: '', address: '' });
+      setLocForm({ name: '', country: 'Zambia', currency: 'USD', manager: '', contact: '', address: '' });
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -91,7 +91,7 @@ export default function ManageShops() {
       await addExpense({
         ...expForm,
         location_type: 'shop',
-        converted_amount_INR: toINR(expForm.amount, expForm.currency)
+        converted_amount_USD: toUSD(expForm.amount, expForm.currency)
       });
       setIsExpModal(false);
       setExpForm({ ...expForm, amount: 0, notes: '' });
@@ -268,7 +268,7 @@ export default function ManageShops() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <span className="font-bold text-gray-900">{formatCurrency(e.amount, e.currency)}</span>
-                      <p className="text-[10px] text-gray-400 font-medium">≈ {formatCurrency(e.converted_amount_INR)}</p>
+                      <p className="text-[10px] text-gray-400 font-medium">≈ {formatCurrency(e.converted_amount_USD)}</p>
                     </td>
                     <td className="px-6 py-4 text-gray-500 text-[11px]">{format(new Date(e.date), 'MMM dd, yyyy')}</td>
                     <td className="px-6 py-4 text-right">
@@ -344,7 +344,7 @@ export default function ManageShops() {
             </div>
             <div>
               <label className="label">Country</label>
-              <select title="Select Country" className="input-field h-11 bg-white" value={locForm.country} onChange={e => setLocForm(f => ({ ...f, country: e.target.value, currency: COUNTRIES.find(c => c.name === e.target.value)?.currency || 'INR' }))}>
+              <select title="Select Country" className="input-field h-11 bg-white" value={locForm.country} onChange={e => setLocForm(f => ({ ...f, country: e.target.value, currency: COUNTRIES.find(c => c.name === e.target.value)?.currency || 'USD' }))}>
                 {COUNTRIES.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
               </select>
             </div>
@@ -380,7 +380,7 @@ export default function ManageShops() {
             <label className="label">Shop</label>
             <select title="Select Shop" required className="input-field h-11 bg-white" value={expForm.location_id} onChange={e => {
                  const s = shops.find(x => x.id === e.target.value);
-                 setExpForm(f => ({ ...f, location_id: e.target.value, currency: s?.currency ?? 'INR' }));
+                 setExpForm(f => ({ ...f, location_id: e.target.value, currency: s?.currency ?? 'USD' }));
             }}>
               <option value="">Select shop...</option>
               {shops.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -443,7 +443,7 @@ export default function ManageShops() {
           </div>
           <div>
             <label className="label">Revenue Target (INR)</label>
-            <input title="Target Revenue" placeholder="₹ 0.00" required type="number" min={1} className="input-field h-11 font-bold" value={targetForm.target_amount_INR || ''} onChange={e => setTargetForm(f => ({ ...f, target_amount_INR: Number(e.target.value) }))} />
+            <input title="Target Revenue" placeholder="$ 0.00" required type="number" min={1} className="input-field h-11 font-bold" value={targetForm.target_amount_USD || ''} onChange={e => setTargetForm(f => ({ ...f, target_amount_USD: Number(e.target.value) }))} />
           </div>
           <button type="submit" className="btn-primary w-full h-11 shadow-lg shadow-primary/10 mt-2" disabled={saving}>Set Monthly Target</button>
         </form>

@@ -7,7 +7,7 @@ import {
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { 
-  useStore, COUNTRIES, CURRENCIES, formatCurrency, toINR 
+  useStore, COUNTRIES, CURRENCIES, formatCurrency, toUSD 
 } from '../store';
 import { format } from 'date-fns';
 
@@ -28,13 +28,13 @@ export default function ManageWarehouses() {
 
   // Forms
   const [locForm, setLocForm] = useState({
-    name: '', country: 'India', currency: 'INR',
+    name: '', country: 'Zambia', currency: 'USD',
     manager: '', contact: '', address: ''
   });
 
   const [expForm, setExpForm] = useState({
     location_id: '', category: 'Maintenance', amount: 0,
-    currency: 'INR', date: new Date().toISOString().split('T')[0], notes: ''
+    currency: 'USD', date: new Date().toISOString().split('T')[0], notes: ''
   });
 
   // Warehouse Performance Analytics
@@ -51,9 +51,9 @@ export default function ManageWarehouses() {
       const outgoing = transfers.filter(t => t.from_location === warehouse.id);
       const incoming = transfers.filter(t => t.to_location === warehouse.id);
       
-      const totalStockValue = stockEntries.reduce((sum, t) => sum + t.converted_value_INR, 0);
-      const totalTransferred = outgoing.reduce((sum, t) => sum + t.converted_value_INR, 0);
-      const totalExpenses = warehouseExpenses.reduce((sum, e) => sum + e.converted_amount_INR, 0);
+      const totalStockValue = stockEntries.reduce((sum, t) => sum + t.converted_value_USD, 0);
+      const totalTransferred = outgoing.reduce((sum, t) => sum + t.converted_value_USD, 0);
+      const totalExpenses = warehouseExpenses.reduce((sum, e) => sum + e.converted_amount_USD, 0);
       
       return {
         ...warehouse,
@@ -79,7 +79,7 @@ export default function ManageWarehouses() {
       }
       setIsLocModal(false);
       setEditingLoc(null);
-      setLocForm({ name: '', country: 'India', currency: 'INR', manager: '', contact: '', address: '' });
+      setLocForm({ name: '', country: 'Zambia', currency: 'USD', manager: '', contact: '', address: '' });
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -94,10 +94,10 @@ export default function ManageWarehouses() {
       await addExpense({
         ...expForm,
         location_type: 'warehouse', // FIX: Explicitly set location_type for proper categorization
-        converted_amount_INR: toINR(expForm.amount, expForm.currency)
+        converted_amount_USD: toUSD(expForm.amount, expForm.currency)
       });
       setIsExpModal(false);
-      setExpForm({ location_id: '', category: 'Maintenance', amount: 0, currency: 'INR', date: new Date().toISOString().split('T')[0], notes: '' });
+      setExpForm({ location_id: '', category: 'Maintenance', amount: 0, currency: 'USD', date: new Date().toISOString().split('T')[0], notes: '' });
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -112,7 +112,7 @@ export default function ManageWarehouses() {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">Warehouse Management</h1>
           <p className="text-xs sm:text-sm text-gray-500 mt-1">Configure warehouse profiles, track maintenance costs, and monitor inventory operations.</p>
         </div>
-        <button onClick={() => { setEditingLoc(null); setLocForm({ name: '', country: 'India', currency: 'INR', manager: '', contact: '', address: '' }); setIsLocModal(true); }} className="btn-primary flex items-center gap-2 text-sm justify-center shadow-lg shadow-primary/20 w-full sm:w-auto">
+        <button onClick={() => { setEditingLoc(null); setLocForm({ name: '', country: 'Zambia', currency: 'USD', manager: '', contact: '', address: '' }); setIsLocModal(true); }} className="btn-primary flex items-center gap-2 text-sm justify-center shadow-lg shadow-primary/20 w-full sm:w-auto">
           <Plus className="w-4 h-4" /> 
           <span className="whitespace-nowrap">Add Warehouse</span>
         </button>
@@ -255,7 +255,7 @@ export default function ManageWarehouses() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <span className="font-bold text-gray-900">{formatCurrency(e.amount, e.currency)}</span>
-                      <p className="text-[10px] text-gray-400 font-medium">≈ {formatCurrency(e.converted_amount_INR)}</p>
+                      <p className="text-[10px] text-gray-400 font-medium">≈ {formatCurrency(e.converted_amount_USD)}</p>
                     </td>
                     <td className="px-6 py-4 text-gray-500 text-[11px]">{format(new Date(e.date), 'MMM dd, yyyy')}</td>
                     <td className="px-6 py-4 text-right">
@@ -313,7 +313,7 @@ export default function ManageWarehouses() {
 
                   <div className="bg-orange-50 rounded-lg p-3 border border-orange-100 mt-2">
                     <p className="text-[9px] uppercase font-black text-orange-600 mb-1 tracking-widest">Maintenance Costs (INR)</p>
-                    <p className="text-lg font-black text-orange-900">{formatCurrency(stat.totalExpenses, 'INR')}</p>
+                    <p className="text-lg font-black text-orange-900">{formatCurrency(stat.totalExpenses, 'USD')}</p>
                   </div>
                 </div>
               </div>
@@ -332,7 +332,7 @@ export default function ManageWarehouses() {
             </div>
             <div>
               <label className="label">Country</label>
-              <select title="Select Country" className="input-field h-11 bg-white" value={locForm.country} onChange={e => setLocForm(f => ({ ...f, country: e.target.value, currency: COUNTRIES.find(c => c.name === e.target.value)?.currency || 'INR' }))}>
+              <select title="Select Country" className="input-field h-11 bg-white" value={locForm.country} onChange={e => setLocForm(f => ({ ...f, country: e.target.value, currency: COUNTRIES.find(c => c.name === e.target.value)?.currency || 'USD' }))}>
                 {COUNTRIES.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
               </select>
             </div>
@@ -369,7 +369,7 @@ export default function ManageWarehouses() {
             <label className="label">Warehouse</label>
             <select title="Select Warehouse" required className="input-field h-11 bg-white" value={expForm.location_id} onChange={e => {
                  const w = warehouses.find(x => x.id === e.target.value);
-                 setExpForm(f => ({ ...f, location_id: e.target.value, currency: w?.currency ?? 'INR' }));
+                 setExpForm(f => ({ ...f, location_id: e.target.value, currency: w?.currency ?? 'USD' }));
             }}>
               <option value="">Select warehouse...</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}

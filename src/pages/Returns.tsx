@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { RotateCcw, Plus, AlertTriangle, Search, MapPin } from 'lucide-react';
+import { RotateCcw, Plus, AlertTriangle, Search, MapPin, Image as ImageIcon, FileUp, X } from 'lucide-react';
 import Modal from '../components/Modal';
 import { useStore } from '../store';
 import { useAuthStore } from '../store/authStore';
@@ -8,59 +8,16 @@ import clsx from 'clsx';
 
 export default function Returns() {
   useAuthStore();
-  const { locations, items, inventory, returns: returnRecords, processReturn } = useStore();
+  const { setReturnModalOpen, setReturnModalMinimized } = useStore();
+  const { locations, items, brands, inventory, returns: returnRecords, processReturn } = useStore();
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [, setError] = useState('');
   const [filterType, setFilterType] = useState<'' | 'sale_return' | 'warehouse_return'>('');
+  const [viewProof, setViewProof] = useState<string | null>(null);
 
-  const [form, setForm] = useState({
-    type: 'sale_return' as 'sale_return' | 'warehouse_return',
-    location_id: '',
-    item_id: '',
-    quantity: 1,
-    reason: '',
-    status: 'Restocked' as 'Restocked' | 'Disposed',
-  });
-
-  const locationItems = form.location_id
-    ? inventory.filter(e => e.location_id === form.location_id).map(e => ({
-        ...e,
-        item: items.find(i => i.id === e.item_id),
-      })).filter(e => e.item)
-    : [];
 
   const filteredReturns = filterType
     ? returnRecords.filter(r => r.type === filterType)
     : returnRecords;
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    const item = items.find(i => i.id === form.item_id);
-    if (!item) { setError('Please select a valid item.'); return; }
-
-    setSaving(true);
-    try {
-      await processReturn({
-        type: form.type,
-        item_id: form.item_id,
-        item_name: item.name,
-        location_id: form.location_id,
-        quantity: form.quantity,
-        reason: form.reason,
-        status: form.status,
-        timestamp: new Date().toISOString(),
-      });
-      setIsModalOpen(false);
-      setForm({ type: 'sale_return', location_id: '', item_id: '', quantity: 1, reason: '', status: 'Restocked' });
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const restockedCount = returnRecords.filter(r => r.status === 'Restocked').length;
   const disposedCount = returnRecords.filter(r => r.status === 'Disposed').length;
@@ -80,7 +37,7 @@ export default function Returns() {
             Manage item reversals and disposal logs.
           </p>
         </div>
-        <button onClick={() => { setIsModalOpen(true); setError(''); }} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-12 px-6 self-start sm:self-auto ml-12 sm:ml-0">
+        <button onClick={() => { setReturnModalOpen(true); setReturnModalMinimized(false); }} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-12 px-6 self-start sm:self-auto ml-12 sm:ml-0">
           <Plus className="w-5 h-5" /> 
           <span className="whitespace-nowrap font-black uppercase tracking-widest text-[10px]">Log Return</span>
         </button>
@@ -204,6 +161,11 @@ export default function Returns() {
                            )}>
                              {r.status}
                            </span>
+                           {r.image_proof && (
+                             <button onClick={() => setViewProof(r.image_proof!)} className="p-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-600 transition-colors" title="View Proof">
+                               <ImageIcon className="w-4 h-4" />
+                             </button>
+                           )}
                           </div>
                         </td>
                         <td className="px-6 py-5 text-gray-400 text-[11px] font-bold tabular-nums">
@@ -255,12 +217,19 @@ export default function Returns() {
                       </div>
 
                       <div className="flex items-center justify-between">
-                        <span className={clsx(
-                          "px-3 py-1 rounded-full text-[10px] font-black shadow-sm",
-                          r.status === 'Restocked' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
-                        )}>
-                          {r.status}
-                        </span>
+                        <div className="flex items-center">
+                          <span className={clsx(
+                            "px-3 py-1 rounded-full text-[10px] font-black shadow-sm",
+                            r.status === 'Restocked' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
+                          )}>
+                            {r.status}
+                          </span>
+                          {r.image_proof && (
+                            <button onClick={() => setViewProof(r.image_proof!)} className="ml-2 p-1 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-600 transition-colors" title="View Proof">
+                              <ImageIcon className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                         <p className="text-gray-400 text-[9px] font-bold">{format(new Date(r.timestamp), 'MMM dd, HH:mm')}</p>
                       </div>
                     </div>
@@ -271,69 +240,14 @@ export default function Returns() {
          </div>
       </div>
 
-      {/* Return Modal Updated for Responsive Inputs */}
-      <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setError(''); }} title="Log System Reversal" description="Record a returned item and choose action." size="md">
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div>
-              <label className="label">Sequence Type</label>
-              <select title="Return Type" className="input-field h-12 bg-white font-bold" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}>
-                <option value="sale_return">Sale Reversal</option>
-                <option value="warehouse_return">Warehouse Flowback</option>
-              </select>
-            </div>
-            <div>
-              <label className="label">Return Action</label>
-              <select title="Action" className="input-field h-12 bg-white font-bold" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as any }))}>
-                <option value="Restocked">Recommit to Inventory</option>
-                <option value="Disposed">Log Disposal (Final)</option>
-              </select>
-            </div>
-            
-            <div className="md:col-span-2">
-              <label className="label">{form.type === 'sale_return' ? 'Shop Location' : 'Warehouse Location'}</label>
-              <select title="Location" required className="input-field h-12 bg-white" value={form.location_id}
-                onChange={e => setForm(f => ({ ...f, location_id: e.target.value, item_id: '' }))}>
-                <option value="">{form.type === 'sale_return' ? 'Select shop…' : 'Select warehouse…'}</option>
-                {locations
-                  .filter(l => form.type === 'sale_return' ? l.type === 'shop' : l.type === 'warehouse')
-                  .map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
-              </select>
-            </div>
 
-            <div className="md:col-span-2">
-              <label className="label">Target Item</label>
-              <select title="Select Item" required className="input-field h-12 bg-white" value={form.item_id}
-                onChange={e => setForm(f => ({ ...f, item_id: e.target.value }))} disabled={!form.location_id}>
-                <option value="">Identify object…</option>
-                {form.type === 'sale_return'
-                  ? items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)
-                  : locationItems.map(e => <option key={e.item_id} value={e.item_id}>{e.item!.name} ({e.quantity} available)</option>)
-                }
-              </select>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 md:col-span-2 gap-5">
-              <div className="sm:col-span-1">
-                <label className="label">Quantity</label>
-                <input title="Quantity" placeholder="0" required type="number" min={1} className="input-field h-12 text-lg font-black" value={form.quantity || ''}
-                  onChange={e => setForm(f => ({ ...f, quantity: Number(e.target.value) }))} />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="label">Cause of Reversal</label>
-                <input title="Reason" placeholder="e.g. Customer return, damaged item" className="input-field h-12" value={form.reason}
-                  onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} />
-              </div>
-            </div>
+      <Modal isOpen={!!viewProof} onClose={() => setViewProof(null)} title="Image Proof" size="md">
+        {viewProof && (
+          <div className="flex justify-center p-4 bg-gray-50 rounded-xl mt-2 border border-gray-100">
+            <img src={viewProof} alt="Return Proof" className="max-w-full max-h-[70vh] rounded-lg shadow-sm" />
           </div>
-
-          <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t border-gray-100">
-            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => { setIsModalOpen(false); setError(''); }}>Cancel</button>
-            <button type="submit" className="btn-primary h-12 px-8 font-black uppercase tracking-widest text-xs shadow-lg shadow-primary/20" disabled={saving}>
-              {saving ? 'Processing Commitment…' : 'Finalize Log'}
-            </button>
-          </div>
-        </form>
+        )}
       </Modal>
     </div>
   );

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { ShoppingCart, TrendingUp, Search, Store, AlertTriangle, Globe, ChevronRight, Activity, Plus, Trash2, Warehouse, FileText } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Modal from '../components/Modal';
-import { useStore, CURRENCIES, formatCurrency, formatDualCurrency, toINR, type InventoryEntry, type Item, type Location } from '../store';
+import { useStore, CURRENCIES, formatCurrency, formatDualCurrency, toUSD, type InventoryEntry, type Item, type Location } from '../store';
 import { useAuthStore } from '../store/authStore';
 import { exportDailySalesReport } from '../lib/bulkOperations';
 import { format } from 'date-fns';
@@ -12,19 +12,14 @@ type ShopRow = InventoryEntry & { item: Item; loc: Location; isLow: boolean };
 
 export default function Shops() {
   const { appUser } = useAuthStore();
-  const { locations, items, inventory, sales, recordSale, brands, transactions } = useStore();
+  const { locations, items, inventory, sales, recordSale, brands, transactions, setRecordSaleModalOpen, setRecordSaleModalMinimized, setRecordSaleLocation, setRecordSaleItems } = useStore();
   const [exporting, setExporting] = useState(false);
 
   const shops = locations.filter(l => l.type === 'shop');
   const [filterShop, setFilterShop] = useState('');
   const [search, setSearch] = useState('');
-  const [saleModal, setSaleModal] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  const [saleLocation, setSaleLocation] = useState('');
-  const [isSaleMinimized, setIsSaleMinimized] = useState(false);
-  const [saleItems, setSaleItems] = useState([{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
-  
+    
+        
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
 
@@ -63,58 +58,19 @@ export default function Shops() {
   const daySales = sales.filter(s => s.timestamp >= startOfDay);
   const monthSales = sales.filter(s => s.timestamp >= startOfMonth);
 
-  const monthProfit = monthSales.reduce((s, x) => s + x.profit_INR, 0);
-  const dayRevenue = daySales.reduce((s, x) => s + x.converted_price_INR, 0);
+  const monthProfit = monthSales.reduce((s, x) => s + x.profit_USD, 0);
+  const dayRevenue = daySales.reduce((s, x) => s + x.converted_price_USD, 0);
   const filteredSales = filterShop
     ? sales.filter(s => s.location_id === filterShop)
     : sales;
 
-  const totalEstimatedProfit = saleItems.reduce((acc, si) => {
-    if (!si.item_id || si.selling_price <= 0) return acc;
-    const cost = inventory.find(e => e.location_id === saleLocation && e.item_id === si.item_id)?.avg_cost_INR ?? 0;
-    const profit = toINR(si.selling_price * si.quantity, si.currency) - (cost * si.quantity);
-    return acc + profit;
-  }, 0);
-
-  const totalAmount = saleItems.reduce((acc, si) => acc + toINR(si.selling_price * si.quantity, si.currency), 0);
-
-  const handleRecordSale = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!saleLocation) return;
-    setSaving(true);
-    try {
-      await Promise.all(saleItems.map(si => {
-        const item = items.find(i => i.id === si.item_id);
-        if (!item) throw new Error('Item missing');
-        return recordSale({
-          location_id: saleLocation,
-          item_id: si.item_id,
-          item_name: item.name,
-          quantity: si.quantity,
-          selling_price: si.selling_price,
-          currency: si.currency,
-          sold_by: appUser?.name ?? 'Staff',
-        });
-      }));
-      setSaleModal(false);
-      setIsSaleMinimized(false);
-      setSaleLocation('');
-      setSaleItems([{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  
+  
+  
   const addSaleItemRow = () => {
-    setSaleItems([...saleItems, { brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
-  };
+      };
 
-  const removeSaleItemRow = (index: number) => {
-    setSaleItems(saleItems.filter((_, i) => i !== index));
-  };
-
+  
   return (
     <div className="space-y-6 lg:space-y-8 animate-in fade-in duration-500">
       {/* Header */}
@@ -158,7 +114,7 @@ export default function Shops() {
             <Globe className="w-4 h-4" />
             <span className="font-black uppercase tracking-widest text-[10px]">Manage Profiles</span>
           </Link>
-          <button onClick={() => setSaleModal(true)} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-11 px-6">
+          <button onClick={() => setRecordSaleModalOpen(true)} className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-11 px-6">
             <ShoppingCart className="w-4 h-4" />
             <span className="font-black uppercase tracking-widest text-[10px]">Record Sale</span>
           </button>
@@ -194,7 +150,7 @@ export default function Shops() {
         <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-200/20 p-6 flex flex-col justify-between sm:col-span-2 lg:col-span-1">
           <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Total Profit</p>
           <div>
-            <p className="text-3xl font-black text-emerald-600 tracking-tighter tabular-nums">{formatCurrency(sales.reduce((s, x) => s + x.profit_INR, 0))}</p>
+            <p className="text-3xl font-black text-emerald-600 tracking-tighter tabular-nums">{formatCurrency(sales.reduce((s, x) => s + x.profit_USD, 0))}</p>
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2 uppercase tracking-tighter">All-time Profit</p>
           </div>
         </div>
@@ -277,7 +233,7 @@ export default function Shops() {
                            {r.quantity}
                          </button>
                        </td>
-                       <td className="px-6 py-4 text-right tabular-nums text-gray-500 font-bold">{formatCurrency(r.avg_cost_INR)}</td>
+                       <td className="px-6 py-4 text-right tabular-nums text-gray-500 font-bold">{formatCurrency(r.avg_cost_USD)}</td>
                        <td className="px-6 py-4 text-center">
                          {r.isLow
                            ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-red-50 text-red-600 border border-red-100"><AlertTriangle className="w-3 h-3" /> Critical</span>
@@ -326,7 +282,7 @@ export default function Shops() {
                         </button>
                        <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100">
                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Cost</p>
-                         <p className="text-sm font-black text-emerald-900 mt-1">{formatCurrency(r.avg_cost_INR)}</p>
+                         <p className="text-sm font-black text-emerald-900 mt-1">{formatCurrency(r.avg_cost_USD)}</p>
                        </div>
                      </div>
 
@@ -384,9 +340,9 @@ export default function Shops() {
                       <p className="text-sm font-black text-gray-900 tracking-tighter">{formatDualCurrency(sale.selling_price * sale.quantity, sale.currency)}</p>
                       <p className={clsx(
                         "text-[10px] font-black uppercase mt-1 tracking-tighter",
-                        sale.profit_INR >= 0 ? 'text-emerald-500' : 'text-red-500'
+                        sale.profit_USD >= 0 ? 'text-emerald-500' : 'text-red-500'
                       )}>
-                        {sale.profit_INR >= 0 ? '+' : ''}{formatCurrency(sale.profit_INR)}
+                        {sale.profit_USD >= 0 ? '+' : ''}{formatCurrency(sale.profit_USD)}
                       </p>
                     </div>
                   </div>
@@ -398,197 +354,7 @@ export default function Shops() {
         </div>
       </div>
 
-      <Modal
-        isOpen={saleModal}
-        onClose={() => { setSaleModal(false); setIsSaleMinimized(false); }}
-        title="Record a Sale"
-        description="Enter the details of the item sold."
-        size="md"
-        minimized={isSaleMinimized}
-        onMinimize={() => setIsSaleMinimized(true)}
-        onRestore={() => setIsSaleMinimized(false)}
-        minimizeLabel={saleLocation ? `${shops.find(s => s.id === saleLocation)?.name ?? ''} · ${saleItems.filter(si => si.item_id).length} item(s)` : 'Selecting shop…'}
-      >
-        <form onSubmit={handleRecordSale} className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div className="md:col-span-2">
-              <label className="label">Shop Location</label>
-              <select title="Select Shop Location" required className="input-field h-12 bg-white font-bold" value={saleLocation} 
-                onChange={e => {
-                  setSaleLocation(e.target.value);
-                  setSaleItems([{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'INR', _id: Date.now() }]);
-                }}>
-                <option value="">Select a shop…</option>
-                {shops.map(s => <option key={s.id} value={s.id}>{s.name} ({s.country})</option>)}
-              </select>
-            </div>
-
-            <div className="md:col-span-2 space-y-4">
-              <div className="flex items-center justify-between">
-                <label className="label">Items Sold</label>
-                <button type="button" onClick={addSaleItemRow} className="text-xs text-primary font-bold flex items-center gap-1 hover:text-primary-dark">
-                  <Plus className="w-4 h-4" /> Add Item
-                </button>
-              </div>
-
-              {saleItems.map((si, index) => {
-                const availableQty = saleLocation && si.item_id
-                  ? inventory.find(e => e.location_id === saleLocation && e.item_id === si.item_id)?.quantity ?? 0
-                  : 0;
-
-                // Full label for selected item
-                const selectedItem = si.item_id ? items.find(i => i.id === si.item_id) : null;
-                const selectedBrand = selectedItem ? brands.find(b => b.id === selectedItem.brand_id) : null;
-                const selectedSku = selectedItem?.sku?.trim() || 'No SKU';
-
-                // Items available at the selected shop
-                const shopItems = saleLocation
-                  ? inventory
-                      .filter(e => e.location_id === saleLocation && e.quantity > 0)
-                      .map(e => ({ ...e, item: items.find(i => i.id === e.item_id) }))
-                      .filter(e => e.item)
-                  : [];
-                
-                return (
-                  <div key={si._id} className="p-4 border border-gray-100 rounded-xl bg-gray-50/50 space-y-4">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-[10px] uppercase font-black tracking-widest text-gray-400">Item #{index + 1}</span>
-                      {saleItems.length > 1 && (
-                        <button title="Remove Item" type="button" onClick={() => removeSaleItemRow(index)} className="text-red-400 hover:text-red-600 transition-colors">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Selected item full-name display */}
-                    {selectedItem && (
-                      <div className="bg-primary/5 border border-primary/10 rounded-lg px-3 py-2 flex items-center gap-2">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-black text-gray-900 truncate">{selectedItem.name}</p>
-                          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
-                            SKU: {selectedSku} · {selectedBrand?.name ?? 'No Brand'}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newRows = [...saleItems];
-                            newRows[index].item_id = '';
-                            setSaleItems(newRows);
-                          }}
-                          className="text-gray-300 hover:text-red-400 transition-colors flex-shrink-0"
-                          title="Clear selection"
-                        >
-                          <span className="text-xs font-black">✕</span>
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Brand + Item row */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="sm:col-span-1">
-                        <select title="Filter by Brand" className="input-field h-12 bg-white font-bold w-full"
-                          value={si.brand_id}
-                          onChange={e => {
-                            const newRows = [...saleItems];
-                            newRows[index].brand_id = e.target.value;
-                            newRows[index].item_id = '';
-                            setSaleItems(newRows);
-                          }}
-                          disabled={!saleLocation}>
-                          <option value="">All Brands</option>
-                          {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                        </select>
-                      </div>
-                      <div className="sm:col-span-2">
-                        <select title="Select Item" required className="input-field h-12 bg-white font-bold w-full"
-                          value={si.item_id}
-                          onChange={e => {
-                            const item = items.find(i => i.id === e.target.value);
-                            const newRows = [...saleItems];
-                            newRows[index].item_id = e.target.value;
-                            newRows[index].selling_price = item?.retail_price || 0;
-                            setSaleItems(newRows);
-                          }}
-                          disabled={!saleLocation}>
-                          <option value="">Choose an item…</option>
-                          {shopItems
-                            .filter(e => !si.brand_id || e.item!.brand_id === si.brand_id)
-                            .sort((a, b) => a.item!.name.localeCompare(b.item!.name))
-                            .map(e => {
-                              const brand = brands.find(b => b.id === e.item!.brand_id);
-                              const sku = e.item!.sku?.trim() || 'No SKU';
-                              return (
-                                <option key={e.item_id} value={e.item_id}>
-                                  {e.item!.name} (SKU: {sku}) ({brand?.name ?? 'No Brand'}) — {e.quantity} Available
-                                </option>
-                              );
-                            })}
-                        </select>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-                      <div>
-                        <input title="Quantity" placeholder="0" required type="number" min={1} max={availableQty || undefined} className="input-field h-12 text-lg font-black w-full" 
-                          value={si.quantity || ''} 
-                          onChange={e => {
-                            const newRows = [...saleItems];
-                            newRows[index].quantity = Number(e.target.value);
-                            setSaleItems(newRows);
-                          }} />
-                      </div>
-                      <div className="sm:col-span-2">
-                        <div className="flex gap-2">
-                          <input title="Selling Price" placeholder="0.00" required type="number" min={0} step="0.01" className="flex-1 input-field h-12 text-lg font-black" 
-                            value={si.selling_price || ''} 
-                            onChange={e => {
-                              const newRows = [...saleItems];
-                              newRows[index].selling_price = Number(e.target.value);
-                              setSaleItems(newRows);
-                            }} />
-                          <select title="Currency" className="w-24 input-field h-12 bg-white font-bold" 
-                            value={si.currency} 
-                            onChange={e => {
-                              const newRows = [...saleItems];
-                              newRows[index].currency = e.target.value;
-                              setSaleItems(newRows);
-                            }}>
-                            {CURRENCIES.map(c => <option key={c}>{c}</option>)}
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {totalAmount > 0 && (
-            <div className={clsx(
-              "rounded-2xl p-5 border shadow-inner flex items-center justify-between",
-              totalEstimatedProfit >= 0 ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-red-50 border-red-100 text-red-700'
-            )}>
-              <div className="space-y-1">
-                <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Estimated Profit (Total)</p>
-                <p className="text-2xl font-black tracking-tight">{formatCurrency(totalEstimatedProfit)}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Total Amount (INR Base)</p>
-                <p className="text-lg font-bold">{formatCurrency(totalAmount)}</p>
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t border-gray-100">
-            <button type="button" className="btn-secondary h-12 px-6 font-bold" onClick={() => { setSaleModal(false); setIsSaleMinimized(false); }}>Cancel</button>
-            <button type="submit" className="btn-primary h-12 px-10 font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20" disabled={saving || saleItems.some(si => !si.item_id)}>
-              {saving ? 'Processing...' : 'Complete Sale'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      
 
       {/* Stock Distribution Modal */}
       <Modal 

@@ -158,7 +158,7 @@ export async function exportInventorySystemData(data: {
       const item = (items || []).find(i => i.id === e.item_id);
       const loc = (locations || []).find(l => l.id === e.location_id);
       const qty = e.quantity || 0;
-      const cost = e.avg_cost_INR || 0;
+      const cost = e.avg_cost_USD || 0;
       return {
         'Item Name': item?.name || e.item_id || 'Unknown',
         'SKU': item?.sku || '',
@@ -177,8 +177,8 @@ export async function exportInventorySystemData(data: {
       'Location': (locations || []).find(l => l.id === s.location_id)?.name || 'Unknown',
       'Qty': s.quantity || 0,
       'Price': (s.selling_price || 0).toFixed(2),
-      'Total (INR)': (s.converted_price_INR || 0).toFixed(2),
-      'Profit (INR)': (s.profit_INR || 0).toFixed(2),
+      'Total (INR)': (s.converted_price_USD || 0).toFixed(2),
+      'Profit (INR)': (s.profit_USD || 0).toFixed(2),
       'Sold By': s.sold_by || 'Unknown'
     })),
     'Returns Log': (returns || []).map(r => ({
@@ -194,17 +194,17 @@ export async function exportInventorySystemData(data: {
       'Location': (locations || []).find(l => l.id === ex.location_id)?.name || 'Unknown',
       'Category': ex.category || 'General',
       'Amount': (ex.amount || 0).toFixed(2),
-      'Currency': ex.currency || 'INR',
-      'Total (INR)': (ex.converted_amount_INR || ex.amount || 0).toFixed(2),
+      'Currency': ex.currency || 'USD',
+      'Total (INR)': (ex.converted_amount_USD || ex.amount || 0).toFixed(2),
       'Notes': ex.notes || ''
     })),
     'Stock Summary': (locations || []).map(l => {
       const locInv = (inventory || []).filter(i => i.location_id === l.id);
       const locSales = (sales || []).filter(s => s.location_id === l.id);
       const totalItems = locInv.reduce((sum, i) => sum + (i.quantity || 0), 0);
-      const totalValue = locInv.reduce((sum, i) => sum + (i.quantity || 0) * (i.avg_cost_INR || 0), 0);
-      const totalRev = locSales.reduce((sum, s) => sum + (s.converted_price_INR || 0), 0);
-      const totalProfit = locSales.reduce((sum, s) => sum + (s.profit_INR || 0), 0);
+      const totalValue = locInv.reduce((sum, i) => sum + (i.quantity || 0) * (i.avg_cost_USD || 0), 0);
+      const totalRev = locSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
+      const totalProfit = locSales.reduce((sum, s) => sum + (s.profit_USD || 0), 0);
       
       return {
         'Location': l.name || 'Unknown',
@@ -483,8 +483,8 @@ export async function exportDailySalesReport(data: {
   daySales.forEach(sale => {
     const item = items.find(i => i.id === sale.item_id);
     const brand = brands.find(b => b.id === item?.brand_id);
-    const totalSale = sale.converted_price_INR || (sale.selling_price * sale.quantity);
-    const profit = sale.profit_INR || 0;
+    const totalSale = sale.converted_price_USD || (sale.selling_price * sale.quantity);
+    const profit = sale.profit_USD || 0;
 
     grandTotalSales += totalSale;
     grandTotalProfit += profit;
@@ -763,7 +763,7 @@ export async function printDailySalesReport777(data: {
             ${daySales.map(sale => {
               const item = items.find(i => i.id === sale.item_id);
               const brand = brands.find(b => b.id === item?.brand_id);
-              const totalVal = sale.converted_price_INR || (sale.selling_price * sale.quantity);
+              const totalVal = sale.converted_price_USD || (sale.selling_price * sale.quantity);
               return `
                 <tr>
                   <td>${brand?.name.toUpperCase() || '-'}</td>
@@ -771,7 +771,7 @@ export async function printDailySalesReport777(data: {
                   <td>${sale.quantity}</td>
                   <td>${formatNum(sale.selling_price)}</td>
                   <td>${formatNum(totalVal)}</td>
-                  <td>${formatNum(sale.profit_INR)}</td>
+                  <td>${formatNum(sale.profit_USD)}</td>
                 </tr>
               `;
             }).join('')}
@@ -782,8 +782,8 @@ export async function printDailySalesReport777(data: {
               <td colspan="2">TOTAL NO. OF BALES SOLD</td>
               <td>${daySales.reduce((a, b) => a + (b.quantity || 0), 0)}</td>
               <td>TOTAL SALES<br/>& PROFIT</td>
-              <td>${formatNum(daySales.reduce((a, b) => a + (b.converted_price_INR || 0), 0))}</td>
-              <td>${formatNum(daySales.reduce((a, b) => a + (b.profit_INR || 0), 0))}</td>
+              <td>${formatNum(daySales.reduce((a, b) => a + (b.converted_price_USD || 0), 0))}</td>
+              <td>${formatNum(daySales.reduce((a, b) => a + (b.profit_USD || 0), 0))}</td>
             </tr>
           </tfoot>
         </table>
@@ -858,14 +858,14 @@ export async function exportDailySalesReport777(data: {
   daySales.forEach(sale => {
     const item = items.find(i => i.id === sale.item_id);
     const brand = brands.find(b => b.id === item?.brand_id);
-    const totalVal = sale.converted_price_INR || (sale.selling_price * sale.quantity);
+    const totalVal = sale.converted_price_USD || (sale.selling_price * sale.quantity);
     rows.push([
       brand?.name.toUpperCase() || '-',
       (sale.item_name || item?.name || 'Unknown').toUpperCase(),
       sale.quantity,
       sale.selling_price,
       totalVal,
-      sale.profit_INR
+      sale.profit_USD
     ]);
   });
 
@@ -875,8 +875,8 @@ export async function exportDailySalesReport777(data: {
     '', 
     daySales.reduce((a, b) => a + (b.quantity || 0), 0),
     'TOTAL SALES & PROFIT',
-    daySales.reduce((a, b) => a + (b.converted_price_INR || 0), 0),
-    daySales.reduce((a, b) => a + (b.profit_INR || 0), 0)
+    daySales.reduce((a, b) => a + (b.converted_price_USD || 0), 0),
+    daySales.reduce((a, b) => a + (b.profit_USD || 0), 0)
   ]);
 
   const wb = XLSX.utils.book_new();
