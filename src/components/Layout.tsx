@@ -49,7 +49,7 @@ export default function Layout() {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { appUser } = useAuthStore();
-  const { notifications } = useStore();
+  const { notifications, baseCurrency, setBaseCurrency, fetchLiveExchangeRates, isSyncingRates } = useStore();
   const role = appUser?.role ?? 'shop_staff';
   const userLocationId = (appUser as any)?.location_id ?? '';
 
@@ -166,12 +166,45 @@ export default function Layout() {
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
-            <div className="hidden sm:flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-semibold px-3 py-1.5 rounded-full">
+            <div className="hidden md:flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 text-emerald-700 text-[11px] font-semibold px-3 py-1.5 rounded-full">
               <Zap className="w-3.5 h-3.5" />
               Live Sync
             </div>
-            <div className="hidden sm:flex items-center gap-1.5 bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold px-3 py-1.5 rounded-full">
-              Base: $ USD
+            <div className="flex items-center gap-2">
+              <select
+                title="Select Base Currency"
+                value={baseCurrency}
+                onChange={(e) => setBaseCurrency(e.target.value)}
+                className="bg-blue-50 border border-blue-100 text-blue-700 text-xs font-bold px-3 py-1.5 rounded-full cursor-pointer hover:bg-blue-100/70 focus:outline-none transition-colors"
+              >
+                <option value="USD">💵 USD ($)</option>
+                <option value="ZMW">🇿🇲 ZMW (K)</option>
+                <option value="INR">🇮🇳 INR (₹)</option>
+                <option value="EUR">🇪🇺 EUR (€)</option>
+                <option value="GBP">🇬🇧 GBP (£)</option>
+                <option value="SAR">🇸🇦 SAR (﷼)</option>
+                <option value="AED">🇦🇪 AED (د.إ)</option>
+              </select>
+              
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await fetchLiveExchangeRates();
+                    alert("✅ Exchange rates synced successfully!");
+                  } catch (e) {
+                    alert("❌ Failed to sync live rates. Please try again.");
+                  }
+                }}
+                disabled={isSyncingRates}
+                className={clsx(
+                  "hidden xs:flex items-center gap-1 bg-gray-50 border border-gray-200 text-gray-600 hover:text-gray-900 hover:bg-gray-100/70 text-xs font-semibold px-3 py-1.5 rounded-full transition-colors",
+                  isSyncingRates && "opacity-60 cursor-not-allowed animate-pulse"
+                )}
+                title="Fetch live exchange rates"
+              >
+                🔄 {isSyncingRates ? "Syncing..." : "Sync Rates"}
+              </button>
             </div>
             <Link to="/notifications" className="relative text-gray-400 hover:text-gray-700 p-2 rounded-lg hover:bg-gray-50 transition-colors">
               <Bell className="w-5 h-5" />

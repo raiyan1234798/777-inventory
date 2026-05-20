@@ -171,15 +171,16 @@ export const exchangeRateManager = new ExchangeRateManager();
  * Uses the exchange rate manager
  */
 export function toUSD(amount: number, currency: string): number {
-  return amount * exchangeRateManager.getRate(currency);
+  const rate = exchangeRateManager.getRate(currency);
+  return rate > 0 ? amount / rate : amount;
 }
 
 /**
- * Utility function to convert amount from INR to another currency
+ * Utility function to convert amount from USD to another currency
  */
-export function fromINR(amountINR: number, currency: string): number {
+export function fromINR(amountUSD: number, currency: string): number {
   const rate = exchangeRateManager.getRate(currency);
-  return rate > 0 ? amountINR / rate : 0;
+  return amountUSD * rate;
 }
 
 /**

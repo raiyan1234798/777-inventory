@@ -70,19 +70,16 @@ export default function GlobalTransferModal() {
 
     setSaving(true);
     try {
-      await Promise.all(transferItems.map(async itemTransfer => {
-        const item = items.find(i => i.id === itemTransfer.item_id);
-        const entry = inventory.find(en => en.location_id === transferForm.from_location && en.item_id === itemTransfer.item_id);
-        return transfer({
-          from_location: transferForm.from_location,
-          to_location: transferForm.to_location,
-          item_id: itemTransfer.item_id,
-          item_name: item?.name ?? '',
-          quantity: itemTransfer.quantity,
-          unit_cost_USD: entry?.avg_cost_USD ?? 0,
-          performed_by: appUser?.name ?? 'Staff',
-        });
-      }));
+      await useStore.getState().executeTransferSession({
+        from_location: transferForm.from_location,
+        to_location: transferForm.to_location,
+        items: transferItems.map(it => ({
+          brand_id: it.brand_id,
+          item_id: it.item_id,
+          quantity: it.quantity
+        })),
+        performed_by: appUser?.name ?? 'Staff'
+      });
       setTransferModalOpen(false);
       setTransferModalMinimized(false);
       setTransferForm({ from_location: '', to_location: '' });
@@ -147,9 +144,6 @@ export default function GlobalTransferModal() {
           <div className="md:col-span-2 space-y-4">
             <div className="flex items-center justify-between">
               <label className="label">Items to Transfer</label>
-              <button type="button" onClick={addItemRow} className="text-xs text-primary font-bold flex items-center gap-1 hover:text-primary-dark">
-                <Plus className="w-4 h-4" /> Add Item
-              </button>
             </div>
 
             {transferItems.map((itemRow, index) => {
@@ -255,6 +249,12 @@ export default function GlobalTransferModal() {
                 </div>
               );
             })}
+
+            <div className="flex justify-end pt-2">
+              <button type="button" onClick={addItemRow} className="btn-secondary text-xs h-10 px-4 font-black uppercase tracking-widest text-primary flex items-center gap-1 hover:bg-gray-100 border-dashed border-2 border-primary/30">
+                <Plus className="w-4 h-4" /> Add Item
+              </button>
+            </div>
 
             {transferForm.from_location && sourceItems.length === 0 && (
               <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mt-2 flex items-center gap-1">

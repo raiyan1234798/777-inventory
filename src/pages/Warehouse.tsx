@@ -853,7 +853,7 @@ export default function Warehouse() {
     try {
       await fixImportStock(
         selectedSession.id,
-        changed.map(r => ({ item_id: r.item_id, newQty: r.currentQty + r.diff, location_id: selectedSession.location_id }))
+        changed.map(r => ({ item_id: r.item_id, newQty: r.newReceivedQty, location_id: selectedSession.location_id }))
       );
       alert(`✅ Import stocks reconciled! ${changed.length} item(s) adjusted.`);
       setIsFixModalOpen(false);
