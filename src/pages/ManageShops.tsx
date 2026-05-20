@@ -50,9 +50,9 @@ export default function ManageShops() {
       const shopExpenses = expenses.filter(e => e.location_id === shop.id);
       const shopTarget = targets.find(t => t.location_id === shop.id && t.month === now);
       
-      const rev = shopSales.reduce((sum, s) => sum + s.converted_price_USD, 0);
-      const prof = shopSales.reduce((sum, s) => sum + s.profit_USD, 0);
-      const exp = shopExpenses.reduce((sum, e) => sum + e.converted_amount_USD, 0);
+      const rev = shopSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
+      const prof = shopSales.reduce((sum, s) => sum + (s.profit_USD || 0), 0);
+      const exp = shopExpenses.reduce((sum, e) => sum + (e.converted_amount_USD || 0), 0);
       
       return {
         ...shop,

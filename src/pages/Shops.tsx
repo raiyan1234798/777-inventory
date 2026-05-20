@@ -58,8 +58,8 @@ export default function Shops() {
   const daySales = sales.filter(s => s.timestamp >= startOfDay);
   const monthSales = sales.filter(s => s.timestamp >= startOfMonth);
 
-  const monthProfit = monthSales.reduce((s, x) => s + x.profit_USD, 0);
-  const dayRevenue = daySales.reduce((s, x) => s + x.converted_price_USD, 0);
+  const monthProfit = monthSales.reduce((s, x) => s + (x.profit_USD || 0), 0);
+  const dayRevenue = daySales.reduce((s, x) => s + (x.converted_price_USD || 0), 0);
   const filteredSales = filterShop
     ? sales.filter(s => s.location_id === filterShop)
     : sales;
@@ -150,7 +150,7 @@ export default function Shops() {
         <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-200/20 p-6 flex flex-col justify-between sm:col-span-2 lg:col-span-1">
           <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Total Profit</p>
           <div>
-            <p className="text-3xl font-black text-emerald-600 tracking-tighter tabular-nums">{formatCurrency(sales.reduce((s, x) => s + x.profit_USD, 0))}</p>
+            <p className="text-3xl font-black text-emerald-600 tracking-tighter tabular-nums">{formatCurrency(sales.reduce((s, x) => s + (x.profit_USD || 0), 0))}</p>
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2 uppercase tracking-tighter">All-time Profit</p>
           </div>
         </div>

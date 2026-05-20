@@ -21,11 +21,11 @@ export default function Finance() {
   const fmt = (amountINR: number) => formatCurrency(convert(amountINR), displayCurrency);
 
   const stats = useMemo(() => {
-    const totalRevenue = sales.reduce((s, x) => s + x.converted_price_USD, 0);
-    const totalCOGS = sales.reduce((s, x) => s + x.avg_cost_USD * x.quantity, 0);
-    const totalProfit = sales.reduce((s, x) => s + x.profit_USD, 0);
-    const totalContainerCost = containers.reduce((s, c) => s + c.converted_cost_USD, 0);
-    const totalInventoryValue = inventory.reduce((s, e) => s + e.quantity * e.avg_cost_USD, 0);
+    const totalRevenue = sales.reduce((s, x) => s + (x.converted_price_USD || 0), 0);
+    const totalCOGS = sales.reduce((s, x) => s + (x.avg_cost_USD || 0) * (x.quantity || 0), 0);
+    const totalProfit = sales.reduce((s, x) => s + (x.profit_USD || 0), 0);
+    const totalContainerCost = containers.reduce((s, c) => s + (c.converted_cost_USD || 0), 0);
+    const totalInventoryValue = inventory.reduce((s, e) => s + (e.quantity || 0) * (e.avg_cost_USD || 0), 0);
     const profitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
     
     const totalPotentialRevenue = inventory.reduce((s, e) => {
@@ -104,8 +104,8 @@ export default function Finance() {
         const d = new Date(s.timestamp);
         return d.getFullYear() === m.year && d.getMonth() === m.month;
       });
-      const revenue = mSales.reduce((s, x) => s + x.converted_price_USD, 0);
-      const profit = mSales.reduce((s, x) => s + x.profit_USD, 0);
+      const revenue = mSales.reduce((s, x) => s + (x.converted_price_USD || 0), 0);
+      const profit = mSales.reduce((s, x) => s + (x.profit_USD || 0), 0);
       return { ...m, revenue, profit };
     });
   }, [sales]);

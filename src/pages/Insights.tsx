@@ -48,9 +48,9 @@ export default function Insights() {
     sales.forEach(s => {
       if (new Date(s.timestamp) >= thirtyDaysAgo) {
         if (!salesMap[s.item_id]) salesMap[s.item_id] = { qty: 0, revenue: 0, profit: 0, orders: 0 };
-        salesMap[s.item_id].qty += s.quantity;
-        salesMap[s.item_id].revenue += s.converted_price_USD;
-        salesMap[s.item_id].profit += s.profit_USD;
+        salesMap[s.item_id].qty += s.quantity || 0;
+        salesMap[s.item_id].revenue += s.converted_price_USD || 0;
+        salesMap[s.item_id].profit += s.profit_USD || 0;
         salesMap[s.item_id].orders += 1;
       }
     });
@@ -91,8 +91,8 @@ export default function Insights() {
       };
     });
 
-    const totalRev = sales.reduce((s, sale) => s + sale.converted_price_USD, 0);
-    const totalProfit = sales.reduce((s, sale) => s + sale.profit_USD, 0);
+    const totalRev = sales.reduce((s, sale) => s + (sale.converted_price_USD || 0), 0);
+    const totalProfit = sales.reduce((s, sale) => s + (sale.profit_USD || 0), 0);
     const margin = totalRev > 0 ? (totalProfit / totalRev) * 100 : 0;
     const totalStock = itemList.reduce((s, i) => s + i.totalQty, 0);
     const totalSold = itemList.reduce((s, i) => s + i.soldLast30, 0);
