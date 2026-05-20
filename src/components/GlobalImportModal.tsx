@@ -8,6 +8,7 @@ import { useStore, CURRENCIES, toUSD, type Brand, type ImportSessionItem } from 
 import { db } from '../lib/firebase';
 import { collection, doc, writeBatch } from 'firebase/firestore';
 import { generateBrandSKU } from '../lib/skuGenerator';
+import { useAuthStore } from '../store/authStore';
 
 const ImportPreviewRow = memo(({ item, idx, importCurrency, onUpdate, onRemove }: any) => {
   return (
@@ -574,6 +575,33 @@ export default function GlobalImportModal() {
         });
         invOpCount++;
 
+        const txQty = pItem.closing ?? pItem.qty ?? 0;
+        if (txQty > 0) {
+          const txRef = doc(collection(db, 'transactions'));
+          if (invOpCount >= INV_CHUNK) {
+            inventoryBatches.push(invBatch);
+            invBatch = writeBatch(db);
+            invOpCount = 0;
+          }
+          invBatch.set(txRef, {
+            id: txRef.id,
+            type: 'stock_entry',
+            from_location: 'supplier',
+            to_location: importTargetLocation,
+            item_id: itemId,
+            item_name: pItem.name,
+            quantity: txQty,
+            unit_cost: pItem.unitCost || 0,
+            currency: importCurrency,
+            converted_value_USD: toUSD((pItem.unitCost || 0) * txQty, importCurrency),
+            performed_by: useAuthStore.getState().user?.name ?? 'Admin',
+            container_id: containerId,
+            notes: 'Imported via Smart Stock Import',
+            timestamp: new Date().toISOString()
+          });
+          invOpCount++;
+        }
+
       }
 
       if (masterOpCount > 0) allMasterBatches.push(masterBatch);
@@ -619,6 +647,7 @@ export default function GlobalImportModal() {
         totalItems: importPreview.reduce((sum, i) => sum + (i.closing ?? i.qty ?? 0), 0),
         items: sessionItems,
         status: 'confirmed',
+        container_id: containerId,
       });
       // ──────────────────────────────────────────────────────────────────────
 
@@ -638,7 +667,7 @@ export default function GlobalImportModal() {
   return (
     <Modal 
       isOpen={isImportModalOpen || isImportModalMinimized} 
-      onClose={() => setImportModalOpen(false)} 
+      onClose={() => { setImportModalOpen(false); setImportModalMinimized(false); }} 
       minimized={isImportModalMinimized}
       onMinimize={() => { setImportModalMinimized(true); setImportModalOpen(false); }}
       onRestore={() => { setImportModalMinimized(false); setImportModalOpen(true); }}

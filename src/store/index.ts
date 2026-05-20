@@ -161,6 +161,7 @@ export interface ImportSession {
   totalItems: number;      // total qty
   items: ImportSessionItem[];
   status: 'confirmed';     // only confirmed imports are stored
+  container_id?: string;
 }
 
 
@@ -493,19 +494,28 @@ export const useStore = create<AppState>((set, get) => ({
 
   fixImportStock: async (sessionId, fixes) => {
     const batch = writeBatch(db);
-    const { inventory } = get();
+    const { inventory, importSessions, transactions } = get();
+
+    const session = importSessions.find(s => s.id === sessionId);
+    if (!session) throw new Error('Session not found');
+
+    const updatedSessionItems = [...session.items];
+
     for (const fix of fixes) {
       const safeLocId = fix.location_id.replace(/\//g, '-');
       const safeItemId = fix.item_id.replace(/\//g, '-');
       const invId = `${safeLocId}_${safeItemId}`;
       const existing = inventory.find(e => e.id === invId);
+      const currentQty = existing?.quantity ?? 0;
+      const diff = fix.newQty - currentQty;
+
       batch.set(doc(db, 'inventory', invId), {
         id: invId,
         location_id: fix.location_id,
         item_id: fix.item_id,
         quantity: fix.newQty,
         opening_balance: existing?.opening_balance ?? fix.newQty,
-        received_balance: existing?.received_balance ?? 0,
+        received_balance: (existing?.received_balance ?? 0) + diff,
         supplied_balance: existing?.supplied_balance ?? 0,
         returned_balance: existing?.returned_balance ?? 0,
         avg_cost_USD: existing?.avg_cost_USD ?? 0,
@@ -513,7 +523,36 @@ export const useStore = create<AppState>((set, get) => ({
         last_fix_timestamp: new Date().toISOString(),
         fixed_from_session: sessionId,
       });
+
+      const sItemIdx = updatedSessionItems.findIndex(si => si.item_id === fix.item_id);
+      if (sItemIdx !== -1) {
+        const sItem = updatedSessionItems[sItemIdx];
+        const newReceivedQty = Math.max(0, sItem.receivedQty + diff);
+        updatedSessionItems[sItemIdx] = {
+          ...sItem,
+          receivedQty: newReceivedQty
+        };
+      }
+
+      if (session.container_id) {
+        const tx = transactions.find(t => t.container_id === session.container_id && t.item_id === fix.item_id && t.type === 'stock_entry');
+        if (tx) {
+          const newTxQty = Math.max(0, tx.quantity + diff);
+          const newConvertedValue = newTxQty * tx.unit_cost;
+          batch.update(doc(db, 'transactions', tx.id), {
+            quantity: newTxQty,
+            converted_value_USD: newConvertedValue
+          });
+        }
+      }
     }
+
+    const updatedTotalItems = updatedSessionItems.reduce((sum, item) => sum + item.receivedQty, 0);
+    batch.update(doc(db, 'import_sessions', sessionId), {
+      items: updatedSessionItems,
+      totalItems: updatedTotalItems
+    });
+
     await batch.commit();
   },
 
@@ -867,6 +906,32 @@ export const useStore = create<AppState>((set, get) => ({
         batch.update(doc(db, 'inventory', invId), {
           quantity: inv.quantity + qtyToAdd,
           received_balance: (inv.received_balance || 0) + qtyToAdd
+        });
+      }
+    }
+
+    // Sync corresponding import session if it exists
+    const session = st.importSessions.find(s => s.container_id === container_id);
+    if (session) {
+      const updatedSessionItems = [...session.items];
+      let sessionUpdated = false;
+      for (const update of updates) {
+        const tx = st.transactions.find(t => t.id === update.transaction_id);
+        if (!tx || tx.type !== 'stock_entry') continue;
+        const sItemIdx = updatedSessionItems.findIndex(si => si.item_id === tx.item_id);
+        if (sItemIdx !== -1) {
+          updatedSessionItems[sItemIdx] = {
+            ...updatedSessionItems[sItemIdx],
+            receivedQty: update.new_quantity
+          };
+          sessionUpdated = true;
+        }
+      }
+      if (sessionUpdated) {
+        const updatedTotalItems = updatedSessionItems.reduce((sum, item) => sum + item.receivedQty, 0);
+        batch.update(doc(db, 'import_sessions', session.id), {
+          items: updatedSessionItems,
+          totalItems: updatedTotalItems
         });
       }
     }
