@@ -225,17 +225,9 @@ export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
 }
 
 export const COUNTRIES = [
-  { name: 'India', currency: 'USD' },
+  { name: 'India', currency: 'INR' },
   { name: 'Zambia', currency: 'ZMW' },
-  { name: 'China', currency: 'CNY' },
-  { name: 'Pakistan', currency: 'PKR' },
-  { name: 'Saudi Arabia', currency: 'SAR' },
-  { name: 'UAE', currency: 'AED' },
-  { name: 'United Kingdom', currency: 'GBP' },
-  { name: 'Europe', currency: 'EUR' },
-  { name: 'USA', currency: 'USD' },
-  { name: 'Kuwait', currency: 'KWD' },
-  { name: 'Qatar', currency: 'QAR' },
+  { name: 'USA', currency: 'USD' }
 ];
 
 export function toUSD(amount: number, currency: string): number {
@@ -302,6 +294,27 @@ export function formatDualCurrency(amount: number, currency: string): string {
   }
   const usdValue = toUSD(amount, currency);
   return `${formatCurrency(amount, currency)} (${formatCurrency(usdValue, 'USD')})`;
+}
+
+/**
+ * Returns a dual currency string using a historical USD value, so that historical 
+ * transactions do not fluctuate when today's exchange rates change.
+ */
+export function formatHistoricalDualCurrency(amount: number, currency: string, historicalUSDValue: number): string {
+  let activeBase = 'USD';
+  try {
+    const state = useStore.getState();
+    if (state && state.baseCurrency) {
+      activeBase = state.baseCurrency;
+    }
+  } catch (e) {}
+
+  if (currency === activeBase) {
+    return formatCurrency(amount, currency);
+  }
+  
+  const baseVal = activeBase === 'USD' ? historicalUSDValue : fromUSD(historicalUSDValue, activeBase);
+  return `${formatCurrency(amount, currency)} (${formatCurrency(baseVal, activeBase)})`;
 }
 
 // ─── Notification Helper Functions ───────────────────────────────────────────
@@ -638,6 +651,21 @@ export const useStore = create<AppState>((set, get) => ({
           ...updatedSessionItems[sItemIdx],
           receivedQty: fix.newQty
         };
+      } else {
+        const addedItem = items.find(it => it.id === fix.item_id);
+        if (addedItem) {
+          const brandObj = brands.find(b => b.id === addedItem.brand_id);
+          updatedSessionItems.push({
+            item_id: addedItem.id,
+            item_name: addedItem.name,
+            sku: addedItem.sku || '',
+            brand: brandObj?.name || 'Unknown',
+            invoiceQty: 0,
+            receivedQty: fix.newQty,
+            unitCost: addedItem.avg_cost_USD || 0,
+            retailPrice: addedItem.retail_price || 0
+          });
+        }
       }
 
       // 3. Update or recreate the transaction record for this import/container.
@@ -921,6 +949,18 @@ export const useStore = create<AppState>((set, get) => ({
           ...updatedSessionItems[sItemIdx],
           quantity: fix.newQty
         };
+      } else {
+        const addedItem = items.find(it => it.id === fix.item_id);
+        if (addedItem) {
+          const brandObj = brands.find(b => b.id === addedItem.brand_id);
+          updatedSessionItems.push({
+            item_id: addedItem.id,
+            item_name: addedItem.name,
+            sku: addedItem.sku || '',
+            brand: brandObj?.name || 'Unknown',
+            quantity: fix.newQty
+          });
+        }
       }
 
       // Update transaction record
@@ -1208,7 +1248,7 @@ export const useStore = create<AppState>((set, get) => ({
   clearLocationStock: async (locationId: string) => {
     try {
       const allInventory = get().inventory
-        .filter(i => i.location_id === locationId)
+        .filter(i => locationId === 'ALL' ? true : i.location_id === locationId)
         .map(i => doc(db, 'inventory', i.id));
 
       for (let i = 0; i < allInventory.length; i += 500) {
@@ -1270,17 +1310,29 @@ export const useStore = create<AppState>((set, get) => ({
     return ref.id;
   },
   deleteBrand: async (id: string) => {
-    // Check if items use this brand
-    const hasItems = get().items.some(i => i.brand_id === id);
-    if (hasItems) throw new Error('Cannot delete brand: items are still assigned to it.');
-    await deleteDoc(doc(db, 'brands', id));
+    return get().deleteBrands([id]);
   },
   deleteBrands: async (ids: string[]) => {
-    const hasItems = get().items.some(i => ids.includes(i.brand_id));
-    if (hasItems) throw new Error('Cannot delete brands: some have items assigned to them.');
-    const batch = writeBatch(db);
-    ids.forEach(id => batch.delete(doc(db, 'brands', id)));
-    await batch.commit();
+    const st = get();
+    const itemsToDelete = st.items.filter(i => ids.includes(i.brand_id));
+    const itemIds = itemsToDelete.map(i => i.id);
+
+    const invToDelete = st.inventory.filter(i => itemIds.includes(i.item_id)).map(i => doc(db, 'inventory', i.id));
+    const txToDelete = st.transactions.filter(t => itemIds.includes(t.item_id)).map(t => doc(db, 'transactions', t.id));
+    const salesToDelete = st.sales.filter(s => itemIds.includes(s.item_id)).map(s => doc(db, 'sales', s.id));
+    const retToDelete = st.returns.filter(r => itemIds.includes(r.item_id)).map(r => doc(db, 'returns', r.id));
+    
+    const brandDocs = ids.map(id => doc(db, 'brands', id));
+    const itemDocs = itemIds.map(id => doc(db, 'items', id));
+
+    const allDocs = [...brandDocs, ...itemDocs, ...invToDelete, ...txToDelete, ...salesToDelete, ...retToDelete];
+
+    // Chunk into 500-op batches
+    for (let i = 0; i < allDocs.length; i += 500) {
+      const b = writeBatch(db);
+      allDocs.slice(i, i + 500).forEach(ref => b.delete(ref));
+      await b.commit();
+    }
   },
 
   // ── Items ──────────────────────────────────────────────────────────────────
@@ -1302,17 +1354,24 @@ export const useStore = create<AppState>((set, get) => ({
     await updateDoc(doc(db, 'items', id), sanitizeForFirestore(updates as Record<string, any>));
   },
   deleteItem: async (id: string) => {
-    // Check for inventory
-    const hasInv = get().inventory.some(e => e.item_id === id && e.quantity > 0);
-    if (hasInv) throw new Error('Cannot delete item: active inventory exists.');
-    await deleteDoc(doc(db, 'items', id));
+    return get().deleteItems([id]);
   },
   deleteItems: async (ids: string[]) => {
-    const hasInv = get().inventory.some(e => ids.includes(e.item_id) && e.quantity > 0);
-    if (hasInv) throw new Error('Cannot delete items: active inventory exists for some selection.');
-    const batch = writeBatch(db);
-    ids.forEach(id => batch.delete(doc(db, 'items', id)));
-    await batch.commit();
+    const st = get();
+    
+    const invToDelete = st.inventory.filter(i => ids.includes(i.item_id)).map(i => doc(db, 'inventory', i.id));
+    const txToDelete = st.transactions.filter(t => ids.includes(t.item_id)).map(t => doc(db, 'transactions', t.id));
+    const salesToDelete = st.sales.filter(s => ids.includes(s.item_id)).map(s => doc(db, 'sales', s.id));
+    const retToDelete = st.returns.filter(r => ids.includes(r.item_id)).map(r => doc(db, 'returns', r.id));
+    const itemDocs = ids.map(id => doc(db, 'items', id));
+
+    const allDocs = [...itemDocs, ...invToDelete, ...txToDelete, ...salesToDelete, ...retToDelete];
+
+    for (let i = 0; i < allDocs.length; i += 500) {
+      const b = writeBatch(db);
+      allDocs.slice(i, i + 500).forEach(ref => b.delete(ref));
+      await b.commit();
+    }
   },
 
   // ── Container ──────────────────────────────────────────────────────────────
@@ -1871,10 +1930,23 @@ export const useStore = create<AppState>((set, get) => ({
     onSnapshot(collection(db, 'exchange_rates'), {
       next: snap => {
         const rates: Record<string, number> = {};
+        let needsUpdate = false;
+        const now = Date.now();
+
         snap.forEach(d => {
           const data = d.data();
           if (data.rate) rates[d.id] = data.rate;
+          
+          if (d.id === 'ZMW' && data.lastUpdated) {
+            const lastUpdate = new Date(data.lastUpdated).getTime();
+            // Update rates if older than 12 hours
+            if (now - lastUpdate > 12 * 60 * 60 * 1000) {
+              needsUpdate = true;
+            }
+          }
         });
+
+        // Automatic rate sync has been disabled per user request to allow fully manual rates.
         get().setExchangeRates(rates);
         checkSyncComplete();
       },

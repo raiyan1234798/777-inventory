@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useStore, formatCurrency, formatDualCurrency } from '../store';
+import { useStore, formatCurrency, formatDualCurrency, formatHistoricalDualCurrency } from '../store';
 import { useAuthStore } from '../store/authStore';
 import { format, subDays, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
 import {
@@ -365,7 +365,7 @@ export default function Dashboard() {
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-base font-black text-gray-900 tabular-nums tracking-tighter">
-                          {formatDualCurrency(tx.unit_cost * tx.quantity, tx.currency)}
+                          {formatHistoricalDualCurrency(tx.unit_cost * tx.quantity, tx.currency, tx.converted_value_USD)}
                         </p>
                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">{format(new Date(tx.timestamp), 'HH:mm • MMM dd')}</p>
                       </div>

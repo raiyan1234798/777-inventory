@@ -72,25 +72,15 @@ export function generateBrandSKU(
   existingSkus: Set<string> = new Set(),
   codeOverride?: string
 ): string {
-  const bp = brandPrefix(brandName || 'XX');
   const cleanOverride = codeOverride ? codeOverride.trim().toUpperCase() : '';
 
   let base = '';
   if (cleanOverride) {
-    // Normalize cleanOverride (remove leading/trailing spaces, replace duplicate separators if any)
-    const upperOverride = cleanOverride;
-    // Check if cleanOverride already starts with bp (e.g. "CP-LCB" starts with "CP")
-    // To be safe, we can match: bp followed by non-alphanumeric, or equal to bp, or just startsWith
-    const startsWithBp = upperOverride.startsWith(bp);
-    if (startsWithBp) {
-      base = upperOverride;
-    } else {
-      // Prepend brand prefix
-      base = `${bp}-${upperOverride}`;
-    }
+    base = cleanOverride;
   } else {
+    // Generate SKU base from item name instead of prepending brand
     const ic = itemCode(itemName || 'XX');
-    base = `${bp}-${ic}`;
+    base = ic;
   }
 
   // Final sanitization of double hyphens or spacing
@@ -107,18 +97,13 @@ export function generateBrandSKU(
   return `${base}-${seq}`;
 }
 
-/**
- * Get canonical SKU form.
- */
 export function canonicalSKU(brandName: string, itemName: string, codeOverride?: string): string {
-  const bp = brandPrefix(brandName || 'XX');
   const cleanOverride = codeOverride ? codeOverride.trim().toUpperCase() : '';
 
   if (cleanOverride) {
-    if (cleanOverride.startsWith(bp)) return cleanOverride;
-    return `${bp}-${cleanOverride}`.replace(/-+/g, '-');
+    return cleanOverride.replace(/-+/g, '-');
   }
 
   const ic = itemCode(itemName || 'XX');
-  return `${bp}-${ic}`.replace(/-+/g, '-');
+  return ic.replace(/-+/g, '-');
 }

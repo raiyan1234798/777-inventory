@@ -5,6 +5,8 @@ import { useAuthStore } from '../store/authStore';
 import { format } from 'date-fns';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
+import { db } from '../lib/firebase';
+import { collection, doc, setDoc } from 'firebase/firestore';
 
 export default function Transfers() {
   const { appUser } = useAuthStore();
@@ -23,6 +25,10 @@ export default function Transfers() {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<'sessions' | 'logs'>('sessions');
+
+  // Quick Add Item Modal State
+  const [showQuickAddItem, setShowQuickAddItem] = useState(false);
+  const [quickAddItemData, setQuickAddItemData] = useState({ brand_id: '', name: '', sku: '' });
   const [sessionSearch, setSessionSearch] = useState('');
   const [logSearch, setLogSearch] = useState('');
 
@@ -527,25 +533,138 @@ export default function Transfers() {
             </div>
 
             {/* Modal Search Option */}
-            <div className="relative">
-              <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search items in this transfer by name, brand, or SKU..."
-                value={fixModalSearch}
-                onChange={(e) => setFixModalSearch(e.target.value)}
-                className="input-field pl-10 h-11 text-xs font-semibold"
-              />
-              {fixModalSearch && (
-                <button
-                  onClick={() => setFixModalSearch('')}
-                  className="absolute right-3 top-3.5 text-xs font-bold text-gray-400 hover:text-gray-600"
-                >
-                  ✕
-                </button>
-              )}
+            <div className="flex gap-3 items-center">
+              <div className="relative flex-grow">
+                <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search items in this transfer by name, brand, or SKU..."
+                  className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary shadow-sm"
+                  value={fixModalSearch}
+                  onChange={e => setFixModalSearch(e.target.value)}
+                />
+              </div>
+              
+              {/* Add Item to Session */}
+              <div className="w-1/3 flex-shrink-0 relative">
+                {showQuickAddItem ? (
+                   <div className="absolute right-0 top-12 z-50 bg-white border border-indigo-200 shadow-xl rounded-xl p-3 w-80">
+                     <div className="text-xs font-bold text-indigo-900 mb-2 flex justify-between items-center">
+                       <span>✨ Create New Item</span>
+                       <button onClick={() => setShowQuickAddItem(false)} className="text-gray-400 hover:text-red-500"><X className="w-4 h-4"/></button>
+                     </div>
+                     <div className="space-y-2">
+                       <select
+                         value={quickAddItemData.brand_id}
+                         onChange={e => setQuickAddItemData({...quickAddItemData, brand_id: e.target.value})}
+                         className="w-full text-xs p-1.5 border rounded bg-gray-50 focus:ring-1 focus:ring-indigo-300"
+                       >
+                         <option value="">Select Brand...</option>
+                         {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                       </select>
+                       <input 
+                         placeholder="Item Name (e.g., ADULT JOGGING PANTS)" 
+                         value={quickAddItemData.name}
+                         onChange={e => setQuickAddItemData({...quickAddItemData, name: e.target.value})}
+                         className="w-full text-xs p-1.5 border rounded bg-gray-50 focus:ring-1 focus:ring-indigo-300"
+                       />
+                       <input 
+                         placeholder="SKU (e.g., SW-003K)" 
+                         value={quickAddItemData.sku}
+                         onChange={e => setQuickAddItemData({...quickAddItemData, sku: e.target.value})}
+                         className="w-full text-xs p-1.5 border rounded bg-gray-50 focus:ring-1 focus:ring-indigo-300"
+                       />
+                       <button
+                         onClick={async () => {
+                           if (!quickAddItemData.brand_id || !quickAddItemData.name || !quickAddItemData.sku) return alert('Please fill all fields');
+                           try {
+                             const newItemId = doc(collection(db, 'items')).id;
+                             await setDoc(doc(db, 'items', newItemId), {
+                               id: newItemId,
+                               brand_id: quickAddItemData.brand_id,
+                               name: quickAddItemData.name,
+                               sku: quickAddItemData.sku,
+                               category: 'Uncategorized',
+                               min_stock_limit: 0
+                             });
+                             
+                             // Add to session
+                             setFixItems(prev => [{
+                                item_id: newItemId,
+                                item_name: quickAddItemData.name,
+                                sku: quickAddItemData.sku,
+                                brand: brands.find(b => b.id === quickAddItemData.brand_id)?.name ?? 'Unknown',
+                                sessionQty: 0,
+                                sourceLiveQty: 0,
+                                destLiveQty: 0,
+                                newQty: 1,
+                                diff: 1,
+                                itemDeleted: false
+                             }, ...prev]);
+                             
+                             setShowQuickAddItem(false);
+                             setQuickAddItemData({ brand_id: '', name: '', sku: '' });
+                           } catch(err) {
+                             alert('Failed to create item');
+                           }
+                         }}
+                         className="w-full bg-indigo-600 text-white text-xs font-bold py-1.5 rounded hover:bg-indigo-700 mt-1"
+                       >
+                         Save & Add to Session
+                       </button>
+                     </div>
+                   </div>
+                ) : (
+                  <select
+                    className="w-full text-sm py-3 px-3 border border-gray-200 rounded-xl outline-none focus:ring-1 focus:ring-primary bg-white shadow-sm"
+                    value=""
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      if (e.target.value === 'NEW_ITEM') {
+                        setShowQuickAddItem(true);
+                        return;
+                      }
+                      const itemId = e.target.value;
+                      if (!fixItems.find(f => f.item_id === itemId)) {
+                        const item = items.find(i => i.id === itemId);
+                        if (item) {
+                          const sourceInv = inventory.find(inv => inv.location_id === selectedSession.from_location && inv.item_id === itemId);
+                          const destInv = inventory.find(inv => inv.location_id === selectedSession.to_location && inv.item_id === itemId);
+                          setFixItems(prev => [{
+                            item_id: item.id,
+                            item_name: item.name,
+                            sku: item.sku || 'No SKU',
+                            brand: brands.find(b => b.id === item.brand_id)?.name ?? 'Unknown',
+                            sessionQty: 0,
+                            sourceLiveQty: sourceInv?.quantity ?? 0,
+                            destLiveQty: destInv?.quantity ?? 0,
+                            newQty: 1, // Default to 1 to signify it was added
+                            diff: 1,
+                            itemDeleted: false
+                          }, ...prev]);
+                        }
+                      }
+                    }}
+                  >
+                    <option value="">+ Add Item to Transfer...</option>
+                    <option value="NEW_ITEM" className="font-bold text-indigo-600 bg-indigo-50">✨ Create New Item...</option>
+                    {Array.from(new Set(items.map(i => i.brand_id))).map(brandId => {
+                      const brandItems = items.filter(i => i.brand_id === brandId);
+                      const brandName = brands.find(b => b.id === brandId)?.name || 'Unknown Brand';
+                      return (
+                        <optgroup key={brandId} label={brandName}>
+                          {brandItems.map(i => (
+                            <option key={i.id} value={i.id}>
+                              {i.name} ({i.sku})
+                            </option>
+                          ))}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                )}
+              </div>
             </div>
-
             {/* Items Table inside Modal */}
             <div className="border border-gray-100 rounded-xl overflow-hidden shadow-inner max-h-[350px] overflow-y-auto">
               <table className="w-full text-left text-xs">

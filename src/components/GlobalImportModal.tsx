@@ -74,6 +74,7 @@ export default function GlobalImportModal() {
 
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [importRetailCurrency, setImportRetailCurrency] = useState<string>('ZMW');
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
@@ -143,13 +144,14 @@ export default function GlobalImportModal() {
         headerIdx = i;
         row.forEach((cell, idx) => {
           if (cell.includes('SL') || cell === 'NO' || cell === 'S.NO' || cell === 'SL.NO' || cell === 'SL NO') colMap['slno'] = idx;
-          if (cell.includes('CODE') || cell === 'CODE#' || cell === 'CODE #') colMap['code'] = idx;
+          if (cell.includes('CODE') || cell === 'CODE#' || cell === 'CODE #' || cell.includes('SKU') || cell === 'SKU') colMap['code'] = idx;
           if (cell.includes('ITEM') || cell.includes('DESCRIPTION') || cell.includes('NAME') || cell.includes('PARTICULAR')) colMap['name'] = idx;
           if (cell.includes('OPENING') || cell === 'OPS') colMap['opening'] = idx;
           if (cell.includes('RECEIVED') || cell === 'REC') colMap['received'] = idx;
-          if (cell.includes('SUPPLIED') || cell.includes('SALES') || cell === 'SUPP' || cell.includes('SOLD')) colMap['supplied'] = idx;
+          if (cell.includes('SUPPLIED') || cell === 'SALES' || cell === 'SUPP' || cell.includes('SOLD')) colMap['supplied'] = idx;
           if (cell.includes('RETURNED') || cell === 'RTD' || cell.includes('RETURN')) colMap['returned'] = idx;
           if (cell.includes('CLOSING') || cell === 'CLS' || cell.includes('BALANCE')) colMap['closing'] = idx;
+          if ((cell.includes('COST') || cell.includes('PRICE') || cell === 'COST' || cell === 'PRICE') && !cell.includes('RETAIL')) colMap['unitCost'] = idx;
         });
         break;
       }
@@ -164,7 +166,33 @@ export default function GlobalImportModal() {
     // Parse data rows
     for (let i = headerIdx + 1; i < rows.length; i++) {
       const row = rows[i] || [];
-      const itemName = String(row[colMap['name']] || '').trim();
+      const itemNameRaw = String(row[colMap['name']] || '').trim();
+      const codeRaw = String(row[colMap['code']] || '').trim();
+
+      let itemName = itemNameRaw;
+      let code = codeRaw;
+
+      // Advanced smart swap logic: 
+      // 1. If description column has code-like digits (e.g. A62, A-62) and SKU column does not (e.g. BRA), swap them.
+      // 2. Otherwise, fall back to length-based swap (longer string is descriptive name, shorter is SKU code).
+      if (itemNameRaw && codeRaw) {
+        const hasDigits = (s: string) => /\d/.test(s);
+        const nameHasDigits = hasDigits(itemNameRaw);
+        const codeHasDigits = hasDigits(codeRaw);
+
+        if (nameHasDigits && !codeHasDigits) {
+          itemName = codeRaw;
+          code = itemNameRaw;
+        } else if (!nameHasDigits && codeHasDigits) {
+          itemName = itemNameRaw;
+          code = codeRaw;
+        } else {
+          if (codeRaw.length > itemNameRaw.length) {
+            itemName = codeRaw;
+            code = itemNameRaw;
+          }
+        }
+      }
 
       // Skip empty, header, or total rows
       if (!itemName || itemName.length < 2) continue;
@@ -174,13 +202,25 @@ export default function GlobalImportModal() {
       // These are typically short names with no numeric data in the row
       const hasAnyNumeric = [colMap['opening'], colMap['received'], colMap['supplied'], colMap['returned'], colMap['closing']]
         .filter(c => c !== undefined)
-        .some(c => { const v = Number(String(row[c] || '').replace(/[^\d.-]/g, '')); return !isNaN(v) && v !== 0; });
-      if (!hasAnyNumeric && itemName.length < 25 && !row[colMap['code']]) continue;
+        .some(c => { 
+          const raw = String(row[c] ?? '').trim();
+          if (raw === '') return false;
+          const v = Number(raw.replace(/[^\d.-]/g, '')); 
+          return !isNaN(v); 
+        });
+      if (!hasAnyNumeric && itemName.length < 25 && !code) continue;
 
       const parseNum = (idx: number | undefined) => {
         if (idx === undefined) return 0;
-        const raw = String(row[idx] || '').replace(/[^\d.-]/g, '');
+        const raw = String(row[idx] ?? '').replace(/[^\d.-]/g, '');
         const n = Math.round(Number(raw));
+        return isNaN(n) ? 0 : n;
+      };
+
+      const parseDecimal = (idx: number | undefined) => {
+        if (idx === undefined) return 0;
+        const raw = String(row[idx] ?? '').replace(/[^\d.-]/g, '');
+        const n = Number(raw);
         return isNaN(n) ? 0 : n;
       };
 
@@ -189,7 +229,7 @@ export default function GlobalImportModal() {
       const supplied = parseNum(colMap['supplied']);
       const returned = parseNum(colMap['returned']);
       const closing = parseNum(colMap['closing']);
-      const code = String(row[colMap['code']] || '').trim();
+      const unitCost = parseDecimal(colMap['unitCost']);
 
       // Use closing stock as quantity; if 0 or missing, use opening + received - supplied + returned
       let qty = closing;
@@ -212,7 +252,7 @@ export default function GlobalImportModal() {
 
       results.push({
         name: itemName, qty: Math.max(qty, 0),
-        unitCost: 0, retailPrice: 0, minStockLimit: 0,
+        unitCost: unitCost, retailPrice: 0, minStockLimit: 0,
         sku: skuCode,
         category: brandName || 'Imported',
         brandName,
@@ -479,6 +519,7 @@ export default function GlobalImportModal() {
 
       for (const pItem of importPreview) {
         const incomingCostINR = toUSD(pItem.unitCost, importCurrency);
+        const incomingRetailUSD = toUSD(pItem.retailPrice || 0, importRetailCurrency);
 
         const brandNameText = (pItem.category || 'Imported').trim().toUpperCase();
         let matchedBrand = localBrandsMap.get(brandNameText);
@@ -511,7 +552,7 @@ export default function GlobalImportModal() {
             sku: generateBrandSKU(brandNameText, pItem.name, importedSkusSet, pItem.sku),
             category: pItem.category || 'Imported',
             min_stock_limit: pItem.minStockLimit || 0,
-            retail_price: pItem.retailPrice || 0,
+            retail_price: incomingRetailUSD,
             avg_cost_USD: incomingCostINR
           };
           if (masterOpCount >= MASTER_CHUNK) {
@@ -525,7 +566,7 @@ export default function GlobalImportModal() {
           newItemsCreated++;
         } else {
           const updateData: any = {};
-          if (pItem.retailPrice !== undefined && pItem.retailPrice > 0) updateData.retail_price = pItem.retailPrice;
+          if (pItem.retailPrice !== undefined && pItem.retailPrice > 0) updateData.retail_price = incomingRetailUSD;
           if (incomingCostINR !== undefined && incomingCostINR > 0) updateData.avg_cost_USD = incomingCostINR;
           if (pItem.minStockLimit !== undefined) updateData.min_stock_limit = pItem.minStockLimit;
           if (brandId) updateData.brand_id = brandId;
@@ -721,7 +762,7 @@ export default function GlobalImportModal() {
               )}
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="label text-gray-900 font-bold flex items-center gap-2">
                  Import Currency
@@ -730,6 +771,15 @@ export default function GlobalImportModal() {
                 {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
               <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-tighter">Currency for costs in this file.</p>
+            </div>
+            <div>
+              <label className="label text-gray-900 font-bold flex items-center gap-2">
+                 Retail Currency
+              </label>
+              <select title="Retail Currency" className="input-field bg-white shadow-sm" value={importRetailCurrency} onChange={e => setImportRetailCurrency(e.target.value)}>
+                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-tighter">Currency for retail prices.</p>
             </div>
             <div>
               <label className="label text-gray-900 font-bold flex items-center gap-2">
@@ -769,7 +819,7 @@ export default function GlobalImportModal() {
                       <th className="py-3 px-3 text-left">Brand</th>
                       <th className="py-3 px-3 text-right">Qty</th>
                       <th className="py-3 px-3 text-right">Unit Cost ({importCurrency})</th>
-                      <th className="py-3 px-3 text-right">Retail Price</th>
+                      <th className="py-3 px-3 text-right">Retail Price ({importRetailCurrency})</th>
                       <th className="py-3 px-3 text-right">Min Limit</th>
                       <th className="py-3 px-3 text-center">Action</th>
                     </tr>

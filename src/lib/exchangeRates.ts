@@ -10,7 +10,7 @@ import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
 export interface ExchangeRateRecord {
   id: string;
   currency: string;
-  rate: number; // INR per unit of this currency
+  rate: number; // Units of this currency per 1 USD
   lastUpdated: string;
   source?: string; // e.g., "ECB", "OpenExchangeRates", "Manual", "CBR"
 }
@@ -23,22 +23,6 @@ export const DEFAULT_EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
   ZMW: 26.5,    // Zambian Kwacha
   INR: 83.5,
-  EUR: 0.92,
-  GBP: 0.79,
-  CNY: 7.23,
-  PKR: 278.5,
-  SAR: 3.75,
-  AED: 3.67,
-  JPY: 153.5,
-  CAD: 1.37,
-  AUD: 1.51,
-  SGD: 1.35,
-  KWD: 0.31,
-  OMR: 0.38,
-  BHD: 0.38,
-  QAR: 3.64,
-  MYR: 4.74,
-  THB: 36.8,
 };
 
 class ExchangeRateManager {
@@ -74,7 +58,7 @@ class ExchangeRateManager {
 
   /**
    * Get the exchange rate for a specific currency
-   * Returns INR per unit of the given currency
+   * Returns units of this currency per 1 USD
    */
   getRate(currency: string): number {
     const record = this.cache.get(currency);
@@ -178,7 +162,7 @@ export function toUSD(amount: number, currency: string): number {
 /**
  * Utility function to convert amount from USD to another currency
  */
-export function fromINR(amountUSD: number, currency: string): number {
+export function fromUSD(amountUSD: number, currency: string): number {
   const rate = exchangeRateManager.getRate(currency);
   return amountUSD * rate;
 }
@@ -193,8 +177,8 @@ export function convertCurrency(
 ): number {
   if (fromCurrency === toCurrency) return amount;
   
-  const amountINR = toUSD(amount, fromCurrency);
-  return fromINR(amountINR, toCurrency);
+  const amountUSD = toUSD(amount, fromCurrency);
+  return fromUSD(amountUSD, toCurrency);
 }
 
 // Export the manager class for admin use

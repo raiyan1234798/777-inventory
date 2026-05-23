@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { ShoppingCart, TrendingUp, Search, Store, AlertTriangle, Globe, ChevronRight, Activity, Plus, Trash2, Warehouse, FileText } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Modal from '../components/Modal';
-import { useStore, CURRENCIES, formatCurrency, formatDualCurrency, toUSD, type InventoryEntry, type Item, type Location } from '../store';
+import { useStore, CURRENCIES, formatCurrency, formatDualCurrency, formatHistoricalDualCurrency, toUSD, type InventoryEntry, type Item, type Location } from '../store';
 import { useAuthStore } from '../store/authStore';
 import { exportDailySalesReport } from '../lib/bulkOperations';
 import { format } from 'date-fns';
@@ -337,7 +337,7 @@ export default function Shops() {
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <p className="text-sm font-black text-gray-900 tracking-tighter">{formatDualCurrency(sale.selling_price * sale.quantity, sale.currency)}</p>
+                      <p className="text-sm font-black text-gray-900 tracking-tighter">{formatHistoricalDualCurrency(sale.selling_price * sale.quantity, sale.currency, sale.converted_price_USD)}</p>
                       <p className={clsx(
                         "text-[10px] font-black uppercase mt-1 tracking-tighter",
                         sale.profit_USD >= 0 ? 'text-emerald-500' : 'text-red-500'

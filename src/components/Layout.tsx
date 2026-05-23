@@ -166,10 +166,6 @@ export default function Layout() {
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
-            <div className="hidden md:flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 text-emerald-700 text-[11px] font-semibold px-3 py-1.5 rounded-full">
-              <Zap className="w-3.5 h-3.5" />
-              Live Sync
-            </div>
             <div className="flex items-center gap-2">
               <select
                 title="Select Base Currency"
@@ -180,31 +176,7 @@ export default function Layout() {
                 <option value="USD">💵 USD ($)</option>
                 <option value="ZMW">🇿🇲 ZMW (K)</option>
                 <option value="INR">🇮🇳 INR (₹)</option>
-                <option value="EUR">🇪🇺 EUR (€)</option>
-                <option value="GBP">🇬🇧 GBP (£)</option>
-                <option value="SAR">🇸🇦 SAR (﷼)</option>
-                <option value="AED">🇦🇪 AED (د.إ)</option>
               </select>
-              
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await fetchLiveExchangeRates();
-                    alert("✅ Exchange rates synced successfully!");
-                  } catch (e) {
-                    alert("❌ Failed to sync live rates. Please try again.");
-                  }
-                }}
-                disabled={isSyncingRates}
-                className={clsx(
-                  "hidden xs:flex items-center gap-1 bg-gray-50 border border-gray-200 text-gray-600 hover:text-gray-900 hover:bg-gray-100/70 text-xs font-semibold px-3 py-1.5 rounded-full transition-colors",
-                  isSyncingRates && "opacity-60 cursor-not-allowed animate-pulse"
-                )}
-                title="Fetch live exchange rates"
-              >
-                🔄 {isSyncingRates ? "Syncing..." : "Sync Rates"}
-              </button>
             </div>
             <Link to="/notifications" className="relative text-gray-400 hover:text-gray-700 p-2 rounded-lg hover:bg-gray-50 transition-colors">
               <Bell className="w-5 h-5" />

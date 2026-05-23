@@ -4,14 +4,14 @@ import {
   Truck, Tag, Globe2, Package, Store, Upload, FileText, X, AlertTriangle,
   Pencil, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight,
   Warehouse as WarehouseIcon, Filter, BarChart3, TrendingUp, ArrowUpDown, Settings, MapPin,
-  History, CheckCircle, Edit3, Minus, RefreshCw
+  History, CheckCircle, Edit3, Minus, RefreshCw, Eye, EyeOff
 } from 'lucide-react';
 import clsx from 'clsx';
 import { db } from '../lib/firebase';
 import { collection, doc, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import Modal from '../components/Modal';
 import {
-  useStore, COUNTRIES, CURRENCIES, toUSD, formatCurrency, formatDualCurrency,
+  useStore, COUNTRIES, CURRENCIES, toUSD, fromUSD, formatCurrency, formatDualCurrency, formatHistoricalDualCurrency,
   type Location, type Brand, type Item, type InventoryEntry, type ImportSession
 } from '../store';
 import { useAuthStore } from '../store/authStore';
@@ -142,6 +142,7 @@ export default function Warehouse() {
   const [locationForm, setLocationForm] = useState({ name: '', type: 'warehouse' as 'warehouse' | 'shop', country: 'Zambia', currency: 'USD' });
   const [brandForm, setBrandForm] = useState({ name: '', origin_country: 'Zambia' });
   const [itemForm, setItemForm] = useState({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 0, avg_cost_USD: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' });
+  const [avgCostCurrency, setAvgCostCurrency] = useState<'USD' | 'ZMW'>('USD');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [isManualBrand, setIsManualBrand] = useState(false);
 
@@ -152,8 +153,21 @@ export default function Warehouse() {
     quantity: 1,
   });
 
+  const [showQuickAddItem, setShowQuickAddItem] = useState(false);
+  const [quickAddItemData, setQuickAddItemData] = useState({ brand_id: '', name: '', sku: '' });
+
   const [drillDownItemId, setDrillDownItemId] = useState<string | null>(null);
   const [isDrillDownOpen, setIsDrillDownOpen] = useState(false);
+  const [expandedContainers, setExpandedContainers] = useState<Set<string>>(new Set());
+
+  const toggleContainerExpanded = (id: string) => {
+    setExpandedContainers(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   // ── Import History State ────────────────────────────────────────────────────
   const [importHistorySearch, setImportHistorySearch] = useState('');
@@ -176,6 +190,7 @@ export default function Warehouse() {
   }[]>([]);
   const [fixSaving, setFixSaving] = useState(false);
   const [deleteSessionConfirm, setDeleteSessionConfirm] = useState<string | null>(null);
+  const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
 
   // ── Regenerate SKUs State ─────────────────────────────────────────────────
   const [regenSaving, setRegenSaving] = useState(false);
@@ -260,6 +275,47 @@ export default function Warehouse() {
       return matchSearch && matchLocation && matchCategory && matchBrand && matchStatus;
     });
 
+    if (!filterLocation) {
+      // Group by item_id when "All Locations" is selected
+      const grouped = new Map<string, RowType>();
+      for (const r of rows) {
+        if (!grouped.has(r.item_id)) {
+          grouped.set(r.item_id, { 
+            ...r, 
+            quantity: 0, 
+            avg_cost_USD: 0, 
+            opening_balance: 0, 
+            received_balance: 0, 
+            supplied_balance: 0, 
+            returned_balance: 0,
+            loc: { ...r.loc, name: 'All Locations', id: 'all' } 
+          });
+        }
+        const g = grouped.get(r.item_id)!;
+        const totalQty = g.quantity + r.quantity;
+        if (totalQty > 0) {
+          g.avg_cost_USD = ((g.avg_cost_USD * g.quantity) + (r.avg_cost_USD * r.quantity)) / totalQty;
+        }
+        g.quantity = totalQty;
+        g.opening_balance += r.opening_balance || 0;
+        g.received_balance += r.received_balance || 0;
+        g.supplied_balance += r.supplied_balance || 0;
+        g.returned_balance += r.returned_balance || 0;
+      }
+      rows = Array.from(grouped.values());
+      
+      // Update computed fields for grouped rows
+      for (const r of rows) {
+        const minLimit = r.item.min_stock_limit ?? 0;
+        r.isOut = r.quantity === 0;
+        r.isLow = !r.isOut && r.quantity < minLimit;
+        r.stockPct = minLimit > 0 ? Math.min((r.quantity / minLimit) * 100, 200) : 100;
+        r.profitMargin = r.item.retail_price && r.avg_cost_USD
+          ? ((r.item.retail_price - r.avg_cost_USD) / r.item.retail_price) * 100
+          : 0;
+      }
+    }
+
     // Sort
     rows.sort((a, b) => {
       let cmp = 0;
@@ -340,13 +396,14 @@ export default function Warehouse() {
   };
 
   const toggleContainerAll = () => {
-    const ids = containers.map(r => r.id);
+    const ids = paginatedContainers.map(r => r.id);
     const allSelected = ids.length > 0 && ids.every(id => selectedContainerIds.has(id));
     const next = new Set(selectedContainerIds);
     if (allSelected) ids.forEach(id => next.delete(id));
     else ids.forEach(id => next.add(id));
     setSelectedContainerIds(next);
   };
+
 
   const toggleLocationAll = () => {
     const ids = paginatedLocations.map(r => r.id);
@@ -411,17 +468,29 @@ export default function Warehouse() {
   };
 
   const executeSingleDelete = async () => {
-    const { id, name } = deleteConfirmModal;
+    const { id, name, tab } = deleteConfirmModal;
     if (!id) return;
     setSaving(true);
     setDeleteConfirmModal(f => ({ ...f, isOpen: false }));
     try {
-       await deleteStockEntry(id);
-       alert(`Deleted ${name} from location.`);
+      if (tab === 'inventory') {
+        await deleteStockEntry(id);
+      } else if (tab === 'items') {
+        await deleteItems([id]);
+      } else if (tab === 'containers') {
+        await deleteContainers([id]);
+      } else if (tab === 'locations') {
+        await deleteLocation(id);
+      } else if (tab === 'brands') {
+        await deleteBrand(id);
+      } else {
+        await deleteStockEntry(id);
+      }
+      alert(`Deleted ${name || 'item'} successfully.`);
     } catch (err: any) {
-       alert("Deletion failed: " + err.message);
+      alert("Deletion failed: " + err.message);
     } finally {
-       setSaving(false);
+      setSaving(false);
     }
   };
 
@@ -532,20 +601,26 @@ export default function Warehouse() {
 
       if (editingItemId) {
         // Prepare item data for master record (exclude inventory-specific fields)
-        const { stock, inventory_id, id, location_id, brand_manual, ...itemData } = itemForm;
+        const { stock, inventory_id, id, location_id, brand_manual, retail_price, avg_cost_USD, ...itemData } = itemForm;
+        const processedRetailPrice = toUSD(retail_price, 'ZMW');
+        const processedAvgCost = avgCostCurrency === 'ZMW' ? toUSD(avg_cost_USD, 'ZMW') : avg_cost_USD;
         
         // Update item master data
-        await updateItem(editingItemId, { ...itemData, brand_id: finalBrandId });
+        await updateItem(editingItemId, { ...itemData, retail_price: processedRetailPrice, avg_cost_USD: processedAvgCost, brand_id: finalBrandId });
         
-        // Update inventory quantity if this edit was triggered from an inventory row
+        // Update inventory quantity and cost if this edit was triggered from an inventory row
         if (itemForm.inventory_id) {
           await updateDoc(doc(db, 'inventory', itemForm.inventory_id), { 
-            quantity: itemForm.stock 
+            quantity: itemForm.stock,
+            avg_cost_USD: processedAvgCost
           });
         }
       } else {
         // Add new item
-        const { id: _, stock, inventory_id, location_id, brand_manual, ...itemData } = itemForm;
+        const { id: _, stock, inventory_id, location_id, brand_manual, retail_price, avg_cost_USD, ...itemData } = itemForm;
+        const processedRetailPrice = toUSD(retail_price, 'ZMW');
+        const processedAvgCost = avgCostCurrency === 'ZMW' ? toUSD(avg_cost_USD, 'ZMW') : avg_cost_USD;
+
         const itemRef = doc(collection(db, 'items'));
         const newItemId = itemRef.id;
         
@@ -553,6 +628,8 @@ export default function Warehouse() {
         await setDoc(itemRef, { 
           id: newItemId, 
           ...itemData, 
+          retail_price: processedRetailPrice,
+          avg_cost_USD: processedAvgCost,
           brand_id: finalBrandId 
         });
 
@@ -564,7 +641,7 @@ export default function Warehouse() {
             location_id: itemForm.location_id,
             item_id: newItemId,
             quantity: itemForm.stock,
-            avg_cost_USD: itemForm.avg_cost_USD
+            avg_cost_USD: processedAvgCost
           });
 
           // 3. Log initial transaction
@@ -577,9 +654,9 @@ export default function Warehouse() {
             item_id: newItemId,
             item_name: itemForm.name,
             quantity: itemForm.stock,
-            unit_cost: itemForm.avg_cost_USD,
+            unit_cost: processedAvgCost,
             currency: 'USD',
-            converted_value_USD: itemForm.avg_cost_USD * itemForm.stock,
+            converted_value_USD: processedAvgCost * itemForm.stock,
             performed_by: appUser?.name || 'Admin',
             timestamp: new Date().toISOString()
           });
@@ -663,6 +740,34 @@ export default function Warehouse() {
         { isPending: true }
       );
 
+      // Save Import Session for manual container onboarding so it shows up in Import History
+      const sessionItems = onboardForm.rows.map(row => {
+        const itemObj = items.find(i => i.id === row.matched_item_id);
+        const brandObj = brands.find(b => b.id === (itemObj?.brand_id || row.brand_name));
+        return {
+          item_id: row.matched_item_id || row.item_name,
+          item_name: row.item_name,
+          sku: row.sku || itemObj?.sku || '',
+          brand: brandObj?.name || row.brand_name || 'Manual',
+          invoiceQty: row.quantity,
+          receivedQty: row.quantity,
+          unitCost: row.unit_cost,
+          retailPrice: row.retail_price,
+        };
+      });
+
+      await useStore.getState().saveImportSession({
+        date: new Date(onboardForm.date).toISOString(),
+        fileName: `Manual Onboarding: ${onboardForm.container_no}`,
+        location_id: onboardForm.location_id,
+        currency: onboardForm.currency,
+        itemCount: onboardForm.rows.length,
+        totalItems: onboardForm.rows.reduce((sum, r) => sum + r.quantity, 0),
+        items: sessionItems,
+        status: 'confirmed',
+        container_id: containerId,
+      });
+
       setOnboardModal(false);
       setActiveStep(1);
       setOnboardForm({
@@ -683,12 +788,18 @@ export default function Warehouse() {
     const sourceInv = inventory.find(e => e.location_id === transferForm.from_location && e.item_id === transferForm.item_id);
     if (!item || !sourceInv) return;
 
+    if (transferForm.quantity > sourceInv.quantity) {
+      alert(`Insufficient stock! You are trying to move ${transferForm.quantity}, but only ${sourceInv.quantity} units are available.`);
+      return;
+    }
+
     setSaving(true);
     try {
-      await transfer({
-        ...transferForm,
-        item_name: item.name,
-        unit_cost_USD: sourceInv.avg_cost_USD,
+      await useStore.getState().executeTransferSession({
+        from_location: transferForm.from_location,
+        to_location: transferForm.to_location,
+        items: [{ brand_id: item.brand_id, item_id: transferForm.item_id, quantity: transferForm.quantity }],
+        notes: 'Direct transfer from Warehouse Management',
         performed_by: appUser?.name ?? 'Admin',
       });
       setTransferModal(false);
@@ -754,6 +865,32 @@ export default function Warehouse() {
         unit_cost: addStockForm.unit_cost,
         currency: addStockForm.currency,
       }], appUser?.name ?? 'Admin');
+
+      // Save Import Session for manual add stock so it shows up in Import History
+      const itemObj = items.find(i => i.id === itemId);
+      const brandObj = brands.find(b => b.id === (itemObj?.brand_id || addStockForm.brand_id));
+      const sessionItems = [{
+        item_id: itemId,
+        item_name: itemName,
+        sku: addStockForm.sku || itemObj?.sku || '',
+        brand: brandObj?.name || addStockForm.brand_manual || 'Manual',
+        invoiceQty: addStockForm.quantity,
+        receivedQty: addStockForm.quantity,
+        unitCost: addStockForm.unit_cost,
+        retailPrice: addStockForm.retail_price || itemObj?.retail_price || 0,
+      }];
+
+      await useStore.getState().saveImportSession({
+        date: new Date().toISOString(),
+        fileName: `Manual Add Stock: ${itemName}`,
+        location_id: addStockForm.location_id,
+        currency: addStockForm.currency,
+        itemCount: 1,
+        totalItems: addStockForm.quantity,
+        items: sessionItems,
+        status: 'confirmed',
+        container_id: 'manual_entry',
+      });
 
       setAddStockModal(false);
       resetAddStockForm();
@@ -1077,7 +1214,7 @@ export default function Warehouse() {
           </div>
           <p className="text-2xl sm:text-3xl font-extrabold text-gray-900 mt-2">{formatCurrency(totalValue)}</p>
           <p className="text-[10px] text-gray-400 mt-5 font-medium flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> At average cost (INR)
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> At average cost
           </p>
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-4 sm:p-5 shadow-sm hover:shadow-md transition-all">
@@ -1409,7 +1546,7 @@ export default function Warehouse() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1.5">
-                          <button title="Edit Item & Costs" onClick={() => { setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: r.item.retail_price || 0, stock: r.quantity, inventory_id: r.id, location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
+                          <button title="Edit Item & Costs" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: Number(fromUSD(r.item.retail_price || 0, 'ZMW').toFixed(2)), stock: r.quantity, inventory_id: r.id, location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
                           <button title="Transfer Stock" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1 }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-3.5 h-3.5" /></button>
                           <button
                             disabled={saving}
@@ -1485,7 +1622,7 @@ export default function Warehouse() {
                           </div>
                         </div>
                         <div className="flex gap-1.5 flex-shrink-0">
-                          <button title="Edit" onClick={() => { setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: r.item.retail_price || 0, stock: r.quantity, inventory_id: r.id, location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
+                          <button title="Edit" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: Number(fromUSD(r.item.retail_price || 0, 'ZMW').toFixed(2)), stock: r.quantity, inventory_id: r.id, location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
                           <button title="Transfer" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1 }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-4 h-4" /></button>
                           <button
                              disabled={saving}
@@ -1668,7 +1805,7 @@ export default function Warehouse() {
                         type="checkbox"
                         title="Select All"
                         className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
-                        checked={containers.length > 0 && containers.every(c => selectedContainerIds.has(c.id))}
+                        checked={paginatedContainers.length > 0 && paginatedContainers.every(c => selectedContainerIds.has(c.id))}
                         onChange={toggleContainerAll}
                       />
                     </th>
@@ -1682,7 +1819,7 @@ export default function Warehouse() {
                 <tbody className="divide-y divide-gray-50 bg-white">
                   {containers.length === 0 ? (
                     <tr><td colSpan={6} className="px-5 py-12 text-center text-gray-400 text-sm">No containers logged yet. Use "Onboard Container" to start.</td></tr>
-                  ) : containers.map(c => (
+                  ) : paginatedContainers.map(c => (
                     <tr key={c.id} className={clsx("hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0", selectedContainerIds.has(c.id) && 'bg-primary/5')}>
                       <td className="px-5 py-3.5">
                         <input
@@ -1704,16 +1841,22 @@ export default function Warehouse() {
                         </div>
                       </td>
                       <td className="px-5 py-3.5 text-gray-500 align-top whitespace-nowrap">{new Date(c.date).toLocaleDateString('en-IN')}</td>
-                      <td className="px-5 py-3.5 text-right font-medium text-gray-900 align-top whitespace-nowrap">{formatDualCurrency(c.total_cost, c.currency)}</td>
+                      <td className="px-5 py-3.5 text-right font-medium text-gray-900 align-top whitespace-nowrap">{formatHistoricalDualCurrency(c.total_cost, c.currency, c.converted_cost_USD)}</td>
                       <td className="px-5 py-3.5 align-top">
                         <div className="text-gray-400 text-[11px] mb-2 italic line-clamp-1" title={c.notes}>{c.notes || 'No container notes'}</div>
                         <div className="flex flex-wrap gap-1.5 min-h-[20px]">
                           {transactions.filter(t => t.container_id === c.id).length > 0 ? (
-                             transactions.filter(t => t.container_id === c.id).map((t: any) => (
-                               <span key={t.id} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 whitespace-nowrap">
-                                 {t.item_name} × {t.quantity}
-                               </span>
-                             ))
+                            expandedContainers.has(c.id) ? (
+                              transactions.filter(t => t.container_id === c.id).map((t: any) => (
+                                <span key={t.id} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 whitespace-nowrap">
+                                  {t.item_name} × {t.quantity}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-[10px] text-gray-500 font-bold bg-gray-50 border border-gray-200 px-2.5 py-1 rounded-md">
+                                {transactions.filter(t => t.container_id === c.id).length} items hidden
+                              </span>
+                            )
                           ) : (
                             <span className="text-[10px] text-gray-300">No stock entry linked yet</span>
                           )}
@@ -1721,6 +1864,11 @@ export default function Warehouse() {
                       </td>
                       <td className="px-5 py-3.5 text-right">
                         <div className="flex justify-end gap-1">
+                          {transactions.filter(t => t.container_id === c.id).length > 0 && (
+                            <button title="Toggle Items" onClick={() => toggleContainerExpanded(c.id)} className="text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors px-3 py-1.5 rounded-lg font-bold text-[10px] uppercase tracking-widest flex items-center gap-1.5">
+                              {expandedContainers.has(c.id) ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />} {expandedContainers.has(c.id) ? 'Hide Items' : 'View Items'}
+                            </button>
+                          )}
                           <button title={c.status === 'Pending' ? 'Receive & Reconcile' : 'Reconcile Mismatch'} onClick={() => openAdjustInvoiceModal(c.id)} className="text-primary bg-primary/10 hover:bg-primary/20 transition-colors px-3 py-1.5 rounded-lg font-bold text-[10px] uppercase tracking-widest flex items-center gap-1.5"><Pencil className="w-3.5 h-3.5" /> {c.status === 'Pending' ? 'Receive & Reconcile' : 'Reconcile Mismatch'}</button>
                           <button title="Delete Container" onClick={() => { setDeleteConfirmModal({ isOpen: true, isBulk: false, id: c.id, name: `Container #${c.container_no}`, tab: 'containers' }); }} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                         </div>
@@ -1741,11 +1889,11 @@ export default function Warehouse() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between px-1 mb-2">
                     <label className="flex items-center gap-2 text-xs font-bold text-gray-500 cursor-pointer">
-                      <input type="checkbox" className="rounded" checked={containers.length > 0 && containers.every(c => selectedContainerIds.has(c.id))} onChange={toggleContainerAll} />
+                      <input type="checkbox" className="rounded" checked={paginatedContainers.length > 0 && paginatedContainers.every(c => selectedContainerIds.has(c.id))} onChange={toggleContainerAll} />
                       Select All Containers
                     </label>
                   </div>
-                  {containers.map(c => (
+                  {paginatedContainers.map(c => (
                     <div key={c.id} className={clsx("bg-white rounded-xl border p-4 shadow-sm hover:shadow-md transition-all", selectedContainerIds.has(c.id) ? 'border-primary bg-primary/5' : 'border-gray-200')}>
                       {/* Header */}
                       <div className="flex justify-between items-start mb-3 gap-2">
@@ -1771,7 +1919,7 @@ export default function Warehouse() {
                       {/* Cost section */}
                       <div className="bg-gradient-to-r from-blue-50 to-blue-50 border border-blue-100 rounded-lg p-3 mb-3">
                         <p className="text-[9px] uppercase font-bold text-blue-600 tracking-wider">Total Cost</p>
-                        <p className="text-sm font-bold text-blue-900 mt-1">{formatDualCurrency(c.total_cost, c.currency)}</p>
+                        <p className="text-sm font-bold text-blue-900 mt-1">{formatHistoricalDualCurrency(c.total_cost, c.currency, c.converted_cost_USD)}</p>
                       </div>
 
                       {/* Actions */}
@@ -1788,6 +1936,33 @@ export default function Warehouse() {
                 </div>
               )}
             </div>
+
+            {/* Containers Pagination */}
+            {containers.length > 0 && (
+              <div className="px-4 sm:px-5 py-3 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
+                <div className="flex items-center gap-3">
+                  <span>Showing {containers.length > 0 ? ((containersPage - 1) * pageSize) + 1 : 0}–{Math.min(containersPage * pageSize, containers.length)} of {containers.length}</span>
+                  <select
+                    title="Rows per page"
+                    value={pageSize}
+                    onChange={e => {
+                      setPageSize(Number(e.target.value));
+                      setContainersPage(1);
+                    }}
+                    className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white font-medium"
+                  >
+                    {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
+                  </select>
+                </div>
+                {Math.ceil(containers.length / pageSize) > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button type="button" title="Previous page" disabled={containersPage === 1} onClick={() => setContainersPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                    <span className="px-3 font-bold">{containersPage} / {Math.ceil(containers.length / pageSize)}</span>
+                    <button type="button" title="Next page" disabled={containersPage >= Math.ceil(containers.length / pageSize)} onClick={() => setContainersPage(p => p + 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1812,7 +1987,7 @@ export default function Warehouse() {
                     <Trash2 className="w-4 h-4" /> Delete ({selectedItemIds.size})
                   </button>
                 )}
-                <button onClick={() => setItemModal(true)} className="btn-primary flex items-center gap-2 text-sm h-10">
+                <button onClick={() => { setAvgCostCurrency('USD'); setItemModal(true); }} className="btn-primary flex items-center gap-2 text-sm h-10">
                   <Plus className="w-4 h-4" /> Add Item
                 </button>
               </div>
@@ -1869,7 +2044,7 @@ export default function Warehouse() {
                         <td className="px-5 py-3.5 text-right">
                           <div className="flex justify-end gap-1.5">
                             <button title="Regenerate SKU" onClick={() => handleRegenSingleSKU(item)} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><RefreshCw className="w-3.5 h-3.5" /></button>
-                            <button title="Edit Item" onClick={() => { setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_USD: 0, retail_price: item.retail_price || 0, stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
+                            <button title="Edit Item" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_USD: 0, retail_price: Number(fromUSD(item.retail_price || 0, 'ZMW').toFixed(2)), stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
                             <button title="Delete Item" onClick={() => setDeleteConfirmModal({ isOpen: true, isBulk: false, id: item.id, name: item.name, tab: 'items' })} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         </td>
@@ -1906,7 +2081,7 @@ export default function Warehouse() {
                             </div>
                           </div>
                           <div className="flex gap-1.5 flex-shrink-0">
-                            <button title="Edit Item" onClick={() => { setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_USD: 0, retail_price: item.retail_price || 0, stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
+                            <button title="Edit Item" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_USD: 0, retail_price: Number(fromUSD(item.retail_price || 0, 'ZMW').toFixed(2)), stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
                             <button title="Delete Item" onClick={() => setDeleteConfirmModal({ isOpen: true, isBulk: false, id: item.id, name: item.name, tab: 'items' })} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
                           </div>
                         </div>
@@ -1940,14 +2115,29 @@ export default function Warehouse() {
             </div>
 
             {/* Items Pagination */}
-            {filteredItems.length > pageSize && (
-              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-                <span>Showing {((itemsPage - 1) * pageSize) + 1}–{Math.min(itemsPage * pageSize, filteredItems.length)} of {filteredItems.length}</span>
-                <div className="flex items-center gap-1">
-                  <button type="button" title="Previous page" disabled={itemsPage === 1} onClick={() => setItemsPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
-                  <span className="px-3 font-bold">{itemsPage} / {Math.ceil(filteredItems.length / pageSize)}</span>
-                  <button type="button" title="Next page" disabled={itemsPage >= Math.ceil(filteredItems.length / pageSize)} onClick={() => setItemsPage(p => p + 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+            {filteredItems.length > 0 && (
+              <div className="px-4 sm:px-5 py-3 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
+                <div className="flex items-center gap-3">
+                  <span>Showing {filteredItems.length > 0 ? ((itemsPage - 1) * pageSize) + 1 : 0}–{Math.min(itemsPage * pageSize, filteredItems.length)} of {filteredItems.length}</span>
+                  <select
+                    title="Rows per page"
+                    value={pageSize}
+                    onChange={e => {
+                      setPageSize(Number(e.target.value));
+                      setItemsPage(1);
+                    }}
+                    className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white font-medium"
+                  >
+                    {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
+                  </select>
                 </div>
+                {Math.ceil(filteredItems.length / pageSize) > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button type="button" title="Previous page" disabled={itemsPage === 1} onClick={() => setItemsPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                    <span className="px-3 font-bold">{itemsPage} / {Math.ceil(filteredItems.length / pageSize)}</span>
+                    <button type="button" title="Next page" disabled={itemsPage >= Math.ceil(filteredItems.length / pageSize)} onClick={() => setItemsPage(p => p + 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2027,14 +2217,29 @@ export default function Warehouse() {
             </div>
 
             {/* Brands Pagination */}
-            {filteredBrands.length > pageSize && (
-              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-                <span>Showing {((brandsPage - 1) * pageSize) + 1}–{Math.min(brandsPage * pageSize, filteredBrands.length)} of {filteredBrands.length}</span>
-                <div className="flex items-center gap-1">
-                  <button type="button" title="Previous page" disabled={brandsPage === 1} onClick={() => setBrandsPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
-                  <span className="px-3 font-bold">{brandsPage} / {Math.ceil(filteredBrands.length / pageSize)}</span>
-                  <button type="button" title="Next page" disabled={brandsPage >= Math.ceil(filteredBrands.length / pageSize)} onClick={() => setBrandsPage(p => p + 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+            {filteredBrands.length > 0 && (
+              <div className="px-4 sm:px-5 py-3 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
+                <div className="flex items-center gap-3">
+                  <span>Showing {filteredBrands.length > 0 ? ((brandsPage - 1) * pageSize) + 1 : 0}–{Math.min(brandsPage * pageSize, filteredBrands.length)} of {filteredBrands.length}</span>
+                  <select
+                    title="Rows per page"
+                    value={pageSize}
+                    onChange={e => {
+                      setPageSize(Number(e.target.value));
+                      setBrandsPage(1);
+                    }}
+                    className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white font-medium"
+                  >
+                    {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
+                  </select>
                 </div>
+                {Math.ceil(filteredBrands.length / pageSize) > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button type="button" title="Previous page" disabled={brandsPage === 1} onClick={() => setBrandsPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                    <span className="px-3 font-bold">{brandsPage} / {Math.ceil(filteredBrands.length / pageSize)}</span>
+                    <button type="button" title="Next page" disabled={brandsPage >= Math.ceil(filteredBrands.length / pageSize)} onClick={() => setBrandsPage(p => p + 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2167,14 +2372,29 @@ export default function Warehouse() {
             </div>
 
             {/* Locations Pagination */}
-            {locations.length > pageSize && (
-              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-                <span>Showing {((locationsPage - 1) * pageSize) + 1}–{Math.min(locationsPage * pageSize, locations.length)} of {locations.length}</span>
-                <div className="flex items-center gap-1">
-                  <button type="button" title="Previous page" disabled={locationsPage === 1} onClick={() => setLocationsPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
-                  <span className="px-3 font-bold">{locationsPage} / {Math.ceil(locations.length / pageSize)}</span>
-                  <button type="button" title="Next page" disabled={locationsPage >= Math.ceil(locations.length / pageSize)} onClick={() => setLocationsPage(p => p + 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+            {locations.length > 0 && (
+              <div className="px-4 sm:px-5 py-3 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
+                <div className="flex items-center gap-3">
+                  <span>Showing {locations.length > 0 ? ((locationsPage - 1) * pageSize) + 1 : 0}–{Math.min(locationsPage * pageSize, locations.length)} of {locations.length}</span>
+                  <select
+                    title="Rows per page"
+                    value={pageSize}
+                    onChange={e => {
+                      setPageSize(Number(e.target.value));
+                      setLocationsPage(1);
+                    }}
+                    className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white font-medium"
+                  >
+                    {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
+                  </select>
                 </div>
+                {Math.ceil(locations.length / pageSize) > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button type="button" title="Previous page" disabled={locationsPage === 1} onClick={() => setLocationsPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                    <span className="px-3 font-bold">{locationsPage} / {Math.ceil(locations.length / pageSize)}</span>
+                    <button type="button" title="Next page" disabled={locationsPage >= Math.ceil(locations.length / pageSize)} onClick={() => setLocationsPage(p => p + 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2292,6 +2512,12 @@ export default function Warehouse() {
                           {/* Right: actions */}
                           <div className="flex items-center gap-2 flex-shrink-0">
                             <button
+                              onClick={() => setExpandedSessions(p => ({ ...p, [session.id]: !p[session.id] }))}
+                              className="px-3 py-2 bg-gray-100 text-gray-700 text-xs font-bold rounded-xl hover:bg-gray-200 transition-all shadow-sm"
+                            >
+                              {expandedSessions[session.id] ? 'Hide Items' : 'View Items'}
+                            </button>
+                            <button
                               onClick={() => openFixModal(session)}
                               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 transition-all shadow-sm hover:shadow-md"
                             >
@@ -2308,19 +2534,21 @@ export default function Warehouse() {
                         </div>
 
                         {/* Collapsed item list preview */}
-                        <div className="border-t border-gray-50 px-5 py-3 bg-gray-50/50 rounded-b-2xl">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Items preview:</span>
-                            {session.items.slice(0, 8).map((it, i) => (
-                              <span key={i} className="text-[10px] bg-white border border-gray-100 text-gray-600 rounded-lg px-2 py-0.5">
-                                {it.item_name} <span className="font-bold text-indigo-600">×{it.receivedQty}</span>
-                              </span>
-                            ))}
-                            {session.items.length > 8 && (
-                              <span className="text-[10px] text-gray-400">+{session.items.length - 8} more</span>
-                            )}
+                        {expandedSessions[session.id] && (
+                          <div className="border-t border-gray-50 px-5 py-3 bg-gray-50/50 rounded-b-2xl">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Items preview:</span>
+                              {session.items.slice(0, 20).map((it, i) => (
+                                <span key={i} className="text-[10px] bg-white border border-gray-100 text-gray-600 rounded-lg px-2 py-0.5">
+                                  {it.item_name} <span className="font-bold text-indigo-600">×{it.receivedQty}</span>
+                                </span>
+                              ))}
+                              {session.items.length > 20 && (
+                                <span className="text-[10px] text-gray-400">+{session.items.length - 20} more</span>
+                              )}
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     );
                   })}
@@ -2369,7 +2597,7 @@ export default function Warehouse() {
                     {/* Search & Quick Actions bar */}
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gray-50/50 p-3 rounded-xl border border-gray-150">
                       {/* Search box */}
-                      <div className="relative flex-1 max-w-md">
+                      <div className="relative flex-1 max-w-sm">
                         <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                         <input
                           type="text"
@@ -2389,14 +2617,133 @@ export default function Warehouse() {
                         )}
                       </div>
 
+                      {/* Add Item to Session */}
+                      <div className="w-auto flex-shrink-0 relative">
+                        {showQuickAddItem ? (
+                           <div className="absolute right-0 top-10 z-50 bg-white border border-indigo-200 shadow-xl rounded-xl p-3 w-80">
+                             <div className="text-xs font-bold text-indigo-900 mb-2 flex justify-between items-center">
+                               <span>✨ Create New Item</span>
+                               <button onClick={() => setShowQuickAddItem(false)} className="text-gray-400 hover:text-red-500"><X className="w-4 h-4"/></button>
+                             </div>
+                             <div className="space-y-2">
+                               <select
+                                 value={quickAddItemData.brand_id}
+                                 onChange={e => setQuickAddItemData({...quickAddItemData, brand_id: e.target.value})}
+                                 className="w-full text-xs p-1.5 border rounded bg-gray-50 focus:ring-1 focus:ring-indigo-300"
+                               >
+                                 <option value="">Select Brand...</option>
+                                 {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                               </select>
+                               <input 
+                                 placeholder="Item Name (e.g., ADULT JOGGING PANTS)" 
+                                 value={quickAddItemData.name}
+                                 onChange={e => setQuickAddItemData({...quickAddItemData, name: e.target.value})}
+                                 className="w-full text-xs p-1.5 border rounded bg-gray-50 focus:ring-1 focus:ring-indigo-300"
+                               />
+                               <input 
+                                 placeholder="SKU (e.g., SW-003K)" 
+                                 value={quickAddItemData.sku}
+                                 onChange={e => setQuickAddItemData({...quickAddItemData, sku: e.target.value})}
+                                 className="w-full text-xs p-1.5 border rounded bg-gray-50 focus:ring-1 focus:ring-indigo-300"
+                               />
+                               <button
+                                 onClick={async () => {
+                                   if (!quickAddItemData.brand_id || !quickAddItemData.name || !quickAddItemData.sku) return alert('Please fill all fields');
+                                   try {
+                                     const newItemId = doc(collection(db, 'items')).id;
+                                     await setDoc(doc(db, 'items', newItemId), {
+                                       id: newItemId,
+                                       brand_id: quickAddItemData.brand_id,
+                                       name: quickAddItemData.name,
+                                       sku: quickAddItemData.sku,
+                                       category: 'Uncategorized',
+                                       min_stock_limit: 0
+                                     });
+                                     
+                                     // Add to session
+                                     setFixItems(prev => [{
+                                        item_id: newItemId,
+                                        item_name: quickAddItemData.name,
+                                        sku: quickAddItemData.sku,
+                                        brand: brands.find(b => b.id === quickAddItemData.brand_id)?.name ?? 'Unknown',
+                                        invoiceQty: 0,
+                                        currentQty: 0,
+                                        originalReceivedQty: 0,
+                                        newReceivedQty: 1,
+                                        diff: 1,
+                                        itemDeleted: false
+                                     }, ...prev]);
+                                     
+                                     setShowQuickAddItem(false);
+                                     setQuickAddItemData({ brand_id: '', name: '', sku: '' });
+                                   } catch(err) {
+                                     alert('Failed to create item');
+                                   }
+                                 }}
+                                 className="w-full bg-indigo-600 text-white text-xs font-bold py-1.5 rounded hover:bg-indigo-700 mt-1"
+                               >
+                                 Save & Add to Session
+                               </button>
+                             </div>
+                           </div>
+                        ) : (
+                          <select
+                            className="w-full max-w-[250px] text-xs py-1.5 px-3 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-300 bg-white"
+                            value=""
+                            onChange={e => {
+                              if (!e.target.value) return;
+                              if (e.target.value === 'NEW_ITEM') {
+                                setShowQuickAddItem(true);
+                                return;
+                              }
+                              const itemId = e.target.value;
+                              if (!fixItems.find(f => f.item_id === itemId)) {
+                                const item = items.find(i => i.id === itemId);
+                                if (item) {
+                                  const existingInv = inventory.find(inv => inv.location_id === selectedSession.location_id && inv.item_id === itemId);
+                                  setFixItems(prev => [{
+                                    item_id: item.id,
+                                    item_name: item.name,
+                                    sku: item.sku || 'No SKU',
+                                    brand: brands.find(b => b.id === item.brand_id)?.name ?? 'Unknown',
+                                    invoiceQty: 0,
+                                    currentQty: existingInv?.quantity ?? 0,
+                                    originalReceivedQty: 0,
+                                    newReceivedQty: 1,
+                                    diff: 1,
+                                    itemDeleted: false
+                                  }, ...prev]);
+                                }
+                              }
+                            }}
+                          >
+                            <option value="">+ Add Item to Session...</option>
+                            <option value="NEW_ITEM" className="font-bold text-indigo-600 bg-indigo-50">✨ Create New Item...</option>
+                            {Array.from(new Set(items.map(i => i.brand_id))).map(brandId => {
+                              const brandItems = items.filter(i => i.brand_id === brandId);
+                              const brandName = brands.find(b => b.id === brandId)?.name || 'Unknown Brand';
+                              return (
+                                <optgroup key={brandId} label={brandName}>
+                                  {brandItems.map(i => (
+                                    <option key={i.id} value={i.id}>
+                                      {i.name} ({i.sku})
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              );
+                            })}
+                          </select>
+                        )}
+                      </div>
+
                       {/* Quick tools */}
-                      <div className="flex items-center gap-2 flex-wrap text-xs">
-                        <span className="text-gray-400 font-semibold">Quick Actions:</span>
+                      <div className="flex items-center gap-2 flex-wrap text-xs ml-auto">
+                        <span className="text-gray-400 font-semibold hidden lg:inline">Quick Actions:</span>
                         <button
                           type="button"
                           onClick={() => setFixItems(prev => prev.map(r => ({ ...r, newReceivedQty: r.originalReceivedQty, diff: 0 })))}
                           className="px-3 py-1.5 bg-gray-100 rounded-lg hover:bg-gray-200 text-gray-650 font-medium transition"
-                        >Reset All Adjustments</button>
+                        >Reset All</button>
                         <button
                           type="button"
                           onClick={() => setFixItems(prev => prev.map(r => {
@@ -2404,7 +2751,7 @@ export default function Warehouse() {
                             return { ...r, newReceivedQty: r.invoiceQty, diff };
                           }))}
                           className="px-3 py-1.5 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-lg hover:bg-emerald-100 font-medium transition"
-                        >Match to Invoice (No Mismatch)</button>
+                        >Match Invoice</button>
                       </div>
                     </div>
 
@@ -2553,7 +2900,7 @@ export default function Warehouse() {
                 <p className="text-sm text-gray-400 mt-1">Configure global platform parameters and exchange rates</p>
               </div>
               <div className="flex gap-2">
-                <div className="px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-[10px] font-bold uppercase tracking-widest border border-blue-100">Live Sync Active</div>
+                <div className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-[10px] font-bold uppercase tracking-widest border border-gray-200">Manual Mode Active</div>
               </div>
             </div>
 
@@ -2564,7 +2911,7 @@ export default function Warehouse() {
                   <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
                     <Globe2 className="w-4 h-4" />
                   </div>
-                  <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Exchange Rates (Per 1 INR)</h3>
+                  <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Exchange Rates (Per 1 USD)</h3>
                 </div>
 
                 <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -2572,7 +2919,7 @@ export default function Warehouse() {
                     <thead className="bg-gray-50 border-b border-gray-100">
                       <tr>
                         <th className="px-5 py-3 text-left font-bold text-gray-500 uppercase tracking-tighter">Currency Code</th>
-                        <th className="px-5 py-3 text-right font-bold text-gray-500 uppercase tracking-tighter">Conversion Rate (to INR)</th>
+                        <th className="px-5 py-3 text-right font-bold text-gray-500 uppercase tracking-tighter">Conversion Rate (from USD)</th>
                         <th className="px-5 py-3 text-right font-bold text-gray-500 uppercase tracking-tighter">Action</th>
                       </tr>
                     </thead>
@@ -2591,17 +2938,17 @@ export default function Warehouse() {
                               </div>
                             </td>
                             <td className="px-5 py-4 text-right">
-                              <p className="text-base font-black text-gray-900 tabular-nums">1 {curr} = ${rate.toFixed(2)}</p>
-                              <p className="text-[10px] text-gray-400 font-medium">Automatic calculation applied</p>
+                              <p className="text-base font-black text-gray-900 tabular-nums">1 USD = {rate.toFixed(2)} {curr}</p>
+                              <p className="text-[10px] text-gray-400 font-medium">Manual calculation applied</p>
                             </td>
                             <td className="px-5 py-4 text-right">
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const newRate = prompt(`Update exchange rate for ${curr} to INR:`, rate.toString());
+                                  const newRate = prompt(`Update exchange rate: 1 USD = ? ${curr}`, rate.toString());
                                   if (newRate && !isNaN(Number(newRate))) {
                                     setDoc(doc(db, 'exchange_rates', curr), { rate: Number(newRate) }, { merge: true });
-                                    alert(`${curr} rate updated to ${newRate} INR successfully.`);
+                                    alert(`1 USD is now set to ${newRate} ${curr} successfully.`);
                                   }
                                 }}
                                 className="text-xs font-bold text-primary hover:underline px-3 py-1 bg-primary/5 rounded-lg transition-all"
@@ -2722,12 +3069,13 @@ export default function Warehouse() {
                       
                       <div className="mt-4 flex flex-col sm:flex-row gap-3">
                         <select 
-                          title="Select Location to Purge"
+                          title="Select Location to Delete Stocks"
                           className="input-field max-w-xs text-xs h-10"
                           value={selectedPurgeLocation}
                           onChange={e => setSelectedPurgeLocation(e.target.value)}
                         >
                           <option value="">Select Location...</option>
+                          <option value="ALL" className="font-bold text-red-600">ALL LOCATIONS</option>
                           {locations.map(l => (
                             <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
                           ))}
@@ -2735,16 +3083,31 @@ export default function Warehouse() {
                         <button 
                           onClick={async () => {
                             if (!selectedPurgeLocation) return alert("Please select a location.");
-                            const locName = locations.find(l => l.id === selectedPurgeLocation)?.name;
-                            if (window.confirm(`Clear all stock for ${locName}? This only affects inventory records for this location.`)) {
+                            
+                            const locName = selectedPurgeLocation === 'ALL' 
+                              ? 'ALL LOCATIONS' 
+                              : locations.find(l => l.id === selectedPurgeLocation)?.name;
+                              
+                            const confirmMsg = selectedPurgeLocation === 'ALL'
+                              ? `WARNING: You are about to DELETE ALL STOCKS across ALL LOCATIONS. This cannot be undone. Proceed?`
+                              : `Delete all stocks for ${locName}? This only affects inventory records for this location.`;
+                              
+                            if (window.confirm(confirmMsg)) {
                                setSaving(true);
-                               try { await clearLocationStock(selectedPurgeLocation); alert(`Stock for ${locName} cleared.`); } catch (err: any) { alert(err.message); } finally { setSaving(false); }
+                               try { 
+                                 await clearLocationStock(selectedPurgeLocation); 
+                                 alert(`Stocks for ${locName} deleted.`); 
+                               } catch (err: any) { 
+                                 alert(err.message); 
+                               } finally { 
+                                 setSaving(false); 
+                               }
                             }
                           }}
                           disabled={saving || !selectedPurgeLocation}
-                          className="bg-gray-900 hover:bg-black text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50"
+                          className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50"
                         >
-                          Empty Location Stock
+                          DELETE STOCKS
                         </button>
                       </div>
                     </div>
@@ -2908,12 +3271,30 @@ export default function Warehouse() {
               </div>
             )}
             <div>
-              <label className="label flex items-center gap-2">Avg Cost (INR) <span className="text-[10px] font-semibold text-orange-600 bg-orange-50 px-2 py-0.5 rounded">Weighted</span></label>
-              <input title="Average Cost in INR" placeholder="0" type="number" step="0.01" min={0} className="input-field" value={itemForm.avg_cost_USD} onChange={e => setItemForm(f => ({ ...f, avg_cost_USD: Number(e.target.value) }))} />
+              <div className="flex items-center justify-between mb-1">
+                <label className="label flex items-center gap-2 mb-0">Avg Cost <span className="text-[10px] font-semibold text-orange-600 bg-orange-50 px-2 py-0.5 rounded">Weighted</span></label>
+                <select 
+                  className="text-xs bg-gray-50 border border-gray-200 rounded p-1 text-gray-700 font-medium"
+                  value={avgCostCurrency}
+                  onChange={e => {
+                    const newCurrency = e.target.value as 'USD'|'ZMW';
+                    if (newCurrency === 'ZMW' && avgCostCurrency === 'USD') {
+                       setItemForm(f => ({ ...f, avg_cost_USD: Number(fromUSD(f.avg_cost_USD, 'ZMW').toFixed(2)) }));
+                    } else if (newCurrency === 'USD' && avgCostCurrency === 'ZMW') {
+                       setItemForm(f => ({ ...f, avg_cost_USD: Number(toUSD(f.avg_cost_USD, 'ZMW').toFixed(2)) }));
+                    }
+                    setAvgCostCurrency(newCurrency);
+                  }}
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="ZMW">ZMW (K)</option>
+                </select>
+              </div>
+              <input title="Average Cost" placeholder="0" type="number" step="0.01" min={0} className="input-field" value={itemForm.avg_cost_USD} onChange={e => setItemForm(f => ({ ...f, avg_cost_USD: Number(e.target.value) }))} />
             </div>
             <div>
-              <label className="label flex items-center gap-2">Retail Price <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Sellable</span></label>
-              <input title="Retail Price" placeholder="0" type="number" step="0.01" min={0} className="input-field" value={itemForm.retail_price} onChange={e => setItemForm(f => ({ ...f, retail_price: Number(e.target.value) }))} />
+              <label className="label flex items-center gap-2">Retail Price (ZMW) <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Sellable</span></label>
+              <input title="Retail Price in ZMW" placeholder="0" type="number" step="0.01" min={0} className="input-field" value={itemForm.retail_price || ''} onChange={e => setItemForm(f => ({ ...f, retail_price: Number(e.target.value) }))} />
             </div>
           </div>
           <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
@@ -3102,7 +3483,7 @@ export default function Warehouse() {
                           }} />
                         </div>
                         <div className="col-span-4 md:col-span-1">
-                          <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">Retail (INR)</label>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">Retail (ZMW)</label>
                           <input title="Retail Price" type="number" step="1" className="input-field text-xs bg-white" value={row.retail_price || ''} onChange={e => {
                             const newRows = [...onboardForm.rows];
                             newRows[idx].retail_price = Number(e.target.value);
