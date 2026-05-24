@@ -31,7 +31,7 @@ export default function Reports() {
 
   // Calculate totals
   const salesTotal = filteredSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
-  const salesRevenue = filteredSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
+  const netProfitTotal = filteredSales.reduce((sum, s) => sum + (s.profit_USD || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -146,8 +146,8 @@ export default function Reports() {
             <p className="text-xs text-blue-500 mt-1">{filteredSales.length} transactions</p>
           </div>
           <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4">
-            <p className="text-xs font-bold text-emerald-600 uppercase mb-1">Revenue</p>
-            <p className="text-2xl font-black text-emerald-900">{formatCurrency(salesRevenue)}</p>
+            <p className="text-xs font-bold text-emerald-600 uppercase mb-1">Net Profit</p>
+            <p className="text-2xl font-black text-emerald-900">{formatCurrency(netProfitTotal)}</p>
           </div>
           <div className="bg-purple-50 border border-purple-100 rounded-xl p-4">
             <p className="text-xs font-bold text-purple-600 uppercase mb-1">Avg Sale</p>
@@ -169,6 +169,7 @@ export default function Reports() {
                   <th className="px-4 py-3 text-left font-bold text-gray-600">QTY</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Unit Price</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Total</th>
+                  <th className="px-4 py-3 text-left font-bold text-gray-600">Net Profit</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Shop</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Date</th>
                 </tr>
@@ -182,6 +183,7 @@ export default function Reports() {
                       <td className="px-4 py-3 text-gray-600">{sale.quantity}</td>
                       <td className="px-4 py-3 text-gray-600">{formatCurrency((sale.converted_price_USD || 0) / (sale.quantity || 1))}</td>
                       <td className="px-4 py-3 font-bold text-gray-900">{formatCurrency(sale.converted_price_USD || 0)}</td>
+                      <td className="px-4 py-3 font-semibold text-emerald-600">{formatCurrency(sale.profit_USD || 0)}</td>
                       <td className="px-4 py-3 text-gray-600">{location?.name}</td>
                       <td className="px-4 py-3 text-gray-600">
                         {sale.timestamp ? new Date(sale.timestamp).toLocaleDateString('en-IN') : '—'}
