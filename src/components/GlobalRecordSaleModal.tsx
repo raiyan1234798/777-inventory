@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import Modal from './Modal';
-import { useStore, CURRENCIES, formatCurrency, toUSD } from '../store';
+import { useStore, CURRENCIES, formatCurrency, toUSD, fromUSD } from '../store';
 import { useAuthStore } from '../store/authStore';
 import clsx from 'clsx';
 
@@ -55,7 +55,9 @@ export default function GlobalRecordSaleModal() {
   };
 
   const addSaleItemRow = () => {
-    setRecordSaleItems([...recordSaleItems, { brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'USD', _id: Date.now() }]);
+    const loc = locations.find(l => l.id === recordSaleLocation);
+    const defaultCurrency = loc?.currency || 'USD';
+    setRecordSaleItems([...recordSaleItems, { brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: defaultCurrency, _id: Date.now() }]);
   };
 
   const removeSaleItemRow = (index: number) => {
@@ -82,8 +84,11 @@ export default function GlobalRecordSaleModal() {
             <label className="label">Shop Location</label>
             <select title="Select Shop Location" required className="input-field h-12 bg-white font-bold" value={recordSaleLocation} 
               onChange={e => {
-                setRecordSaleLocation(e.target.value);
-                setRecordSaleItems([{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'USD', _id: Date.now() }]);
+                const locId = e.target.value;
+                const loc = locations.find(l => l.id === locId);
+                const defaultCurrency = loc?.currency || 'USD';
+                setRecordSaleLocation(locId);
+                setRecordSaleItems([{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: defaultCurrency, _id: Date.now() }]);
               }}>
               <option value="">Select a shop…</option>
               {shops.map(s => <option key={s.id} value={s.id}>{s.name} ({s.country})</option>)}
@@ -167,7 +172,12 @@ export default function GlobalRecordSaleModal() {
                           const item = items.find(i => i.id === e.target.value);
                           const newRows = [...recordSaleItems];
                           newRows[index].item_id = e.target.value;
-                          newRows[index].selling_price = item?.retail_price || 0;
+                          if (item?.retail_price) {
+                            const convertedPrice = fromUSD(item.retail_price, si.currency);
+                            newRows[index].selling_price = Number(convertedPrice.toFixed(2));
+                          } else {
+                            newRows[index].selling_price = 0;
+                          }
                           setRecordSaleItems(newRows);
                         }}
                         disabled={!recordSaleLocation}>
@@ -210,8 +220,19 @@ export default function GlobalRecordSaleModal() {
                         <select title="Currency" className="w-24 input-field h-12 bg-white font-bold" 
                           value={si.currency} 
                           onChange={e => {
+                            const newCurrency = e.target.value;
                             const newRows = [...recordSaleItems];
-                            newRows[index].currency = e.target.value;
+                            const oldCurrency = si.currency;
+                            const oldPrice = si.selling_price;
+                            
+                            newRows[index].currency = newCurrency;
+                            
+                            if (oldPrice > 0) {
+                              const priceInUSD = toUSD(oldPrice, oldCurrency);
+                              const newPrice = fromUSD(priceInUSD, newCurrency);
+                              newRows[index].selling_price = Number(newPrice.toFixed(2));
+                            }
+                            
                             setRecordSaleItems(newRows);
                           }}>
                           {CURRENCIES.map(c => <option key={c}>{c}</option>)}

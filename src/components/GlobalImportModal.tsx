@@ -172,28 +172,6 @@ export default function GlobalImportModal() {
       let itemName = itemNameRaw;
       let code = codeRaw;
 
-      // Advanced smart swap logic: 
-      // 1. If description column has code-like digits (e.g. A62, A-62) and SKU column does not (e.g. BRA), swap them.
-      // 2. Otherwise, fall back to length-based swap (longer string is descriptive name, shorter is SKU code).
-      if (itemNameRaw && codeRaw) {
-        const hasDigits = (s: string) => /\d/.test(s);
-        const nameHasDigits = hasDigits(itemNameRaw);
-        const codeHasDigits = hasDigits(codeRaw);
-
-        if (nameHasDigits && !codeHasDigits) {
-          itemName = codeRaw;
-          code = itemNameRaw;
-        } else if (!nameHasDigits && codeHasDigits) {
-          itemName = itemNameRaw;
-          code = codeRaw;
-        } else {
-          if (codeRaw.length > itemNameRaw.length) {
-            itemName = codeRaw;
-            code = itemNameRaw;
-          }
-        }
-      }
-
       // Skip empty, header, or total rows
       if (!itemName || itemName.length < 2) continue;
       const upper = itemName.toUpperCase();
@@ -555,6 +533,7 @@ export default function GlobalImportModal() {
             retail_price: incomingRetailUSD,
             avg_cost_USD: incomingCostINR
           };
+          importedSkusSet.add(newItem.sku);
           if (masterOpCount >= MASTER_CHUNK) {
             allMasterBatches.push(masterBatch);
             masterBatch = writeBatch(db);

@@ -5,6 +5,7 @@
  */
 
 import * as XLSX from 'xlsx';
+import { useStore, fromUSD, toUSD } from '../store';
 
 export interface BulkImportOptions {
   batchSize?: number;
@@ -625,6 +626,7 @@ export async function printDailySalesReport777(data: {
   const { locationId, date, sales, locations, items, brands, inventory, transactions, returns } = data;
   const location = locations.find(l => l.id === locationId);
   const locationName = location?.name || 'Unknown';
+  const baseCurrency = useStore.getState().baseCurrency;
 
   // Use the sales data directly as it's already filtered by UI
   const daySales = sales;
@@ -717,8 +719,8 @@ export async function printDailySalesReport777(data: {
       </head>
       <body>
         <div class="header-container">
-          <div class="location-title"><br/></div>
-          <div class="header-center">SHOP-DAILY SALES REPORT-2026</div>
+          <div class="location-title">SHOP NAME: ${locationName.toUpperCase()}</div>
+          <div class="header-center">SHOP-DAILY SALES REPORT-2026 (${baseCurrency})</div>
           <div class="header-right">${new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }).replace(/\//g, '-')}</div>
         </div>
 
@@ -726,10 +728,10 @@ export async function printDailySalesReport777(data: {
           <div class="summary-block border-l-0">
             <div class="summary-header">BALES</div>
             <table class="summary-table">
-              <tr><th>OPENING BALANCE</th><td>${baleStats.opening || ''}</td></tr>
-              <tr><th>RECEIVED</th><td>${baleStats.received || ''}</td></tr>
-              <tr><th>SOLD</th><td>${baleStats.sold || ''}</td></tr>
-              <tr><th>CLOSING BALANCE</th><td>${baleStats.closing || ''}</td></tr>
+              <tr><th>OPENING BALANCE</th><td></td></tr>
+              <tr><th>RECEIVED</th><td></td></tr>
+              <tr><th>SOLD</th><td></td></tr>
+              <tr><th>CLOSING BALANCE</th><td></td></tr>
             </table>
           </div>
 
@@ -740,10 +742,10 @@ export async function printDailySalesReport777(data: {
           <div class="summary-block border-r-0">
             <div class="summary-header">BAGS & BOXES</div>
             <table class="summary-table">
-              <tr><th>OPENING BALANCE</th><td>${boxStats.opening || ''}</td></tr>
-              <tr><th>RECEIVED</th><td>${boxStats.received || ''}</td></tr>
-              <tr><th>SOLD</th><td>${boxStats.sold || ''}</td></tr>
-              <tr><th>CLOSING BALANCE</th><td>${boxStats.closing || ''}</td></tr>
+              <tr><th>OPENING BALANCE</th><td></td></tr>
+              <tr><th>RECEIVED</th><td></td></tr>
+              <tr><th>SOLD</th><td></td></tr>
+              <tr><th>CLOSING BALANCE</th><td></td></tr>
             </table>
           </div>
         </div>
@@ -754,8 +756,9 @@ export async function printDailySalesReport777(data: {
               <th>BRANDS</th>
               <th>ITEM DESCRIPTION</th>
               <th>NO. QTY<br/>SOLD</th>
+              <th>UNIT COST</th>
               <th>ACTUAL<br/>SELLING<br/>PRICE PER<br/>UNIT</th>
-              <th>#VALUE!</th>
+              <th>TOTAL SALES</th>
               <th>NET<br/>PROFIT</th>
             </tr>
           </thead>
@@ -763,27 +766,35 @@ export async function printDailySalesReport777(data: {
             ${daySales.map(sale => {
               const item = items.find(i => i.id === sale.item_id);
               const brand = brands.find(b => b.id === item?.brand_id);
-              const totalVal = sale.converted_price_USD || (sale.selling_price * sale.quantity);
+              const costUSD = sale.avg_cost_USD || item?.avg_cost_USD || 0;
+              const costBase = fromUSD(costUSD, baseCurrency);
+              const sellingPriceBase = fromUSD(toUSD(sale.selling_price, sale.currency), baseCurrency);
+              const totalValBase = fromUSD(sale.converted_price_USD || (toUSD(sale.selling_price, sale.currency) * sale.quantity), baseCurrency);
+              const profitUSD = sale.profit_USD ?? (toUSD(sale.selling_price, sale.currency) * sale.quantity - costUSD * sale.quantity);
+              const profitBase = fromUSD(profitUSD, baseCurrency);
+
               return `
                 <tr>
                   <td>${brand?.name.toUpperCase() || '-'}</td>
                   <td class="text-left">${(sale.item_name || item?.name || 'Unknown').toUpperCase()}</td>
                   <td>${sale.quantity}</td>
-                  <td>${formatNum(sale.selling_price)}</td>
-                  <td>${formatNum(totalVal)}</td>
-                  <td>${formatNum(sale.profit_USD)}</td>
+                  <td>${formatNum(Number(costBase.toFixed(2)))}</td>
+                  <td>${formatNum(Number(sellingPriceBase.toFixed(2)))}</td>
+                  <td>${formatNum(Number(totalValBase.toFixed(2)))}</td>
+                  <td>${formatNum(Number(profitBase.toFixed(2)))}</td>
                 </tr>
               `;
             }).join('')}
-              ${daySales.length < 5 ? `<tr><td colspan="6" style="height: ${100 - (daySales.length * 20)}px"></td></tr>` : ''}
+              ${daySales.length < 5 ? `<tr><td colspan="7" style="height: ${100 - (daySales.length * 20)}px"></td></tr>` : ''}
           </tbody>
           <tfoot>
             <tr class="footer-row">
               <td colspan="2">TOTAL NO. OF BALES SOLD</td>
               <td>${daySales.reduce((a, b) => a + (b.quantity || 0), 0)}</td>
               <td>TOTAL SALES<br/>& PROFIT</td>
-              <td>${formatNum(daySales.reduce((a, b) => a + (b.converted_price_USD || 0), 0))}</td>
-              <td>${formatNum(daySales.reduce((a, b) => a + (b.profit_USD || 0), 0))}</td>
+              <td></td>
+              <td>${formatNum(Number(fromUSD(daySales.reduce((a, b) => a + (b.converted_price_USD || 0), 0), baseCurrency).toFixed(2)))}</td>
+              <td>${formatNum(Number(fromUSD(daySales.reduce((a, b) => a + (b.profit_USD || 0), 0), baseCurrency).toFixed(2)))}</td>
             </tr>
           </tfoot>
         </table>
@@ -814,6 +825,7 @@ export async function exportDailySalesReport777(data: {
   const { locationId, date, sales, locations, items, brands, inventory, transactions } = data;
   const location = locations.find(l => l.id === locationId);
   const locationName = location?.name || 'Unknown';
+  const baseCurrency = useStore.getState().baseCurrency;
 
   const daySales = sales;
 
@@ -840,32 +852,39 @@ export async function exportDailySalesReport777(data: {
   const boxStats = filterSummary(cat => !cat.toLowerCase().includes('bale'));
 
   const rows: any[][] = [];
-  rows.push(['', 'SHOP-DAILY SALES REPORT-2026', '', '', '', new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }).replace(/\//g, '-')]);
-  rows.push(['', '', '', '', '', '']);
+  rows.push(['', `SHOP-DAILY SALES REPORT-2026 (${baseCurrency})`, '', '', '', '', new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }).replace(/\//g, '-')]);
+  rows.push(['', `SHOP NAME: ${locationName.toUpperCase()}`, '', '', '', '', '']);
   rows.push([]);
 
   // Summary row
-  rows.push(['BALES', '', '', 'BAGS & BOXES', '', '']);
-  rows.push(['OPENING BALANCE', baleStats.opening || '', locationName.toUpperCase(), 'OPENING BALANCE', boxStats.opening || '', '']);
-  rows.push(['RECEIVED', baleStats.received || '', '', 'RECEIVED', boxStats.received || '', '']);
-  rows.push(['SOLD', baleStats.sold || '', '', 'SOLD', boxStats.sold || '', '']);
-  rows.push(['CLOSING BALANCE', baleStats.closing || '', '', 'CLOSING BALANCE', boxStats.closing || '', '']);
+  rows.push(['BALES', '', '', 'BAGS & BOXES', '', '', '']);
+  rows.push(['OPENING BALANCE', '', locationName.toUpperCase(), 'OPENING BALANCE', '', '', '']);
+  rows.push(['RECEIVED', '', '', 'RECEIVED', '', '', '']);
+  rows.push(['SOLD', '', '', 'SOLD', '', '', '']);
+  rows.push(['CLOSING BALANCE', '', '', 'CLOSING BALANCE', '', '', '']);
   rows.push([]);
 
   // Table header
-  rows.push(['BRANDS', 'ITEM DESCRIPTION', 'NO. QTY SOLD', 'ACTUAL SELLING PRICE PER UNIT', '#VALUE!', 'NET PROFIT']);
+  rows.push(['BRANDS', 'ITEM DESCRIPTION', 'NO. QTY SOLD', 'UNIT COST', 'ACTUAL SELLING PRICE PER UNIT', 'TOTAL SALES', 'NET PROFIT']);
 
   daySales.forEach(sale => {
     const item = items.find(i => i.id === sale.item_id);
     const brand = brands.find(b => b.id === item?.brand_id);
-    const totalVal = sale.converted_price_USD || (sale.selling_price * sale.quantity);
+    const costUSD = sale.avg_cost_USD || item?.avg_cost_USD || 0;
+    const costBase = fromUSD(costUSD, baseCurrency);
+    const sellingPriceBase = fromUSD(toUSD(sale.selling_price, sale.currency), baseCurrency);
+    const totalValBase = fromUSD(sale.converted_price_USD || (toUSD(sale.selling_price, sale.currency) * sale.quantity), baseCurrency);
+    const profitUSD = sale.profit_USD ?? (toUSD(sale.selling_price, sale.currency) * sale.quantity - costUSD * sale.quantity);
+    const profitBase = fromUSD(profitUSD, baseCurrency);
+
     rows.push([
       brand?.name.toUpperCase() || '-',
       (sale.item_name || item?.name || 'Unknown').toUpperCase(),
       sale.quantity,
-      sale.selling_price,
-      totalVal,
-      sale.profit_USD
+      Number(costBase.toFixed(2)),
+      Number(sellingPriceBase.toFixed(2)),
+      Number(totalValBase.toFixed(2)),
+      Number(profitBase.toFixed(2))
     ]);
   });
 
@@ -875,13 +894,14 @@ export async function exportDailySalesReport777(data: {
     '', 
     daySales.reduce((a, b) => a + (b.quantity || 0), 0),
     'TOTAL SALES & PROFIT',
-    daySales.reduce((a, b) => a + (b.converted_price_USD || 0), 0),
-    daySales.reduce((a, b) => a + (b.profit_USD || 0), 0)
+    '',
+    Number(fromUSD(daySales.reduce((a, b) => a + (b.converted_price_USD || 0), 0), baseCurrency).toFixed(2)),
+    Number(fromUSD(daySales.reduce((a, b) => a + (b.profit_USD || 0), 0), baseCurrency).toFixed(2))
   ]);
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{ wch: 15 }, { wch: 30 }, { wch: 15 }, { wch: 25 }, { wch: 15 }, { wch: 15 }];
+  ws['!cols'] = [{ wch: 15 }, { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 25 }, { wch: 15 }, { wch: 15 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Daily Report');
   XLSX.writeFile(wb, `Daily_Sales_Report_${locationName}_${date}.xlsx`);
 }
