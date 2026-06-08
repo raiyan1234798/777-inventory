@@ -386,7 +386,7 @@ interface AppState {
   // Global Modals State
   isTransferModalOpen: boolean;
   isTransferModalMinimized: boolean;
-  transferForm: { from_location: string; to_location: string };
+  transferForm: { from_location: string; to_location: string; notes?: string };
   transferItems: { brand_id: string; item_id: string; quantity: number; _id: number }[];
   
   isRecordSaleModalOpen: boolean;
@@ -1062,7 +1062,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   isTransferModalOpen: false,
   isTransferModalMinimized: false,
-  transferForm: { from_location: '', to_location: '' },
+  transferForm: { from_location: '', to_location: '', notes: '' },
   transferItems: [{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }],
   
   isRecordSaleModalOpen: false,

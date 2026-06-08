@@ -14,6 +14,7 @@ export default function GlobalTransferModal() {
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [transferNote, setTransferNote] = useState('');
 
   if (!isTransferModalOpen && !isTransferModalMinimized) return null;
 
@@ -78,12 +79,14 @@ export default function GlobalTransferModal() {
           item_id: it.item_id,
           quantity: it.quantity
         })),
-        performed_by: appUser?.name ?? 'Staff'
+        performed_by: appUser?.name ?? 'Staff',
+        notes: transferNote.trim() || undefined
       });
       setTransferModalOpen(false);
       setTransferModalMinimized(false);
       setTransferForm({ from_location: '', to_location: '' });
       setTransferItems([{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }]);
+      setTransferNote('');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -95,6 +98,7 @@ export default function GlobalTransferModal() {
     setTransferModalOpen(false);
     setTransferModalMinimized(false);
     setError('');
+    setTransferNote('');
   };
 
   const addItemRow = () => {
@@ -139,6 +143,24 @@ export default function GlobalTransferModal() {
                 <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
               ))}
             </select>
+          </div>
+
+          {/* Transfer Reference/Note */}
+          <div className="md:col-span-2">
+            <label className="label">Transfer Reference / Note <span className="text-gray-400 font-normal text-[10px]">(Optional — visible in transfer history)</span></label>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="e.g. TRF-001, Weekly restocking, Container shipment..."
+                value={transferNote}
+                onChange={e => setTransferNote(e.target.value)}
+                maxLength={100}
+                className="input-field h-11 bg-white w-full pr-16"
+              />
+              {transferNote && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 font-bold">{transferNote.length}/100</span>
+              )}
+            </div>
           </div>
 
           <div className="md:col-span-2 space-y-4">

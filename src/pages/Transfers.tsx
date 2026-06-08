@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { ArrowRightLeft, Send, AlertTriangle, ChevronRight, Activity, Plus, Trash2, Search, Filter, Calendar, Edit3, CheckCircle, Info, X } from 'lucide-react';
+import { ArrowRightLeft, Send, AlertTriangle, ChevronRight, Activity, Plus, Trash2, Search, Filter, Calendar, Edit3, CheckCircle, Info, X, FileText } from 'lucide-react';
 import { useStore, formatCurrency, toUSD, formatDualCurrency } from '../store';
 import { useAuthStore } from '../store/authStore';
 import { format } from 'date-fns';
@@ -31,6 +31,8 @@ export default function Transfers() {
   const [quickAddItemData, setQuickAddItemData] = useState({ brand_id: '', name: '', sku: '' });
   const [sessionSearch, setSessionSearch] = useState('');
   const [logSearch, setLogSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   // Reconciliation modal state
   const [selectedSession, setSelectedSession] = useState<any | null>(null);
@@ -40,17 +42,29 @@ export default function Transfers() {
   const [fixSaving, setFixSaving] = useState(false);
 
   const transferLogs = useMemo(() => {
-    const logs = transactions.filter(t => t.type === 'transfer');
-    if (!logSearch.trim()) return logs;
-    const q = logSearch.toLowerCase().trim();
-    return logs.filter(t => {
-      const fromName = locations.find(l => l.id === t.from_location)?.name.toLowerCase() ?? '';
-      const toName = locations.find(l => l.id === t.to_location)?.name.toLowerCase() ?? '';
-      const itemName = t.item_name.toLowerCase();
-      const unitCostStr = t.unit_cost?.toString() || '';
-      return fromName.includes(q) || toName.includes(q) || itemName.includes(q) || unitCostStr.includes(q);
-    });
-  }, [transactions, logSearch, locations]);
+    let logs = transactions.filter(t => t.type === 'transfer');
+    
+    if (dateFrom) {
+      logs = logs.filter(t => new Date(t.timestamp || 0) >= new Date(dateFrom));
+    }
+    if (dateTo) {
+      const end = new Date(dateTo);
+      end.setHours(23, 59, 59, 999);
+      logs = logs.filter(t => new Date(t.timestamp || 0) <= end);
+    }
+
+    if (logSearch.trim()) {
+      const q = logSearch.toLowerCase().trim();
+      logs = logs.filter(t => {
+        const fromName = locations.find(l => l.id === t.from_location)?.name.toLowerCase() ?? '';
+        const toName = locations.find(l => l.id === t.to_location)?.name.toLowerCase() ?? '';
+        const itemName = t.item_name.toLowerCase();
+        const unitCostStr = t.unit_cost?.toString() || '';
+        return fromName.includes(q) || toName.includes(q) || itemName.includes(q) || unitCostStr.includes(q);
+      });
+    }
+    return logs;
+  }, [transactions, logSearch, dateFrom, dateTo, locations]);
 
   const getLocationName = (id: string) => {
     if (id === 'supplier') return 'Supplier';
@@ -132,17 +146,30 @@ export default function Transfers() {
   };
 
   const filteredSessions = useMemo(() => {
-    if (!sessionSearch.trim()) return transferSessions;
-    const q = sessionSearch.toLowerCase().trim();
-    return transferSessions.filter(s => {
-      const fromName = getLocationName(s.from_location).toLowerCase();
-      const toName = getLocationName(s.to_location).toLowerCase();
-      const note = s.notes?.toLowerCase() ?? '';
-      const perf = s.performed_by?.toLowerCase() ?? '';
-      const dateStr = format(new Date(s.date), 'MMM dd, yyyy').toLowerCase();
-      return fromName.includes(q) || toName.includes(q) || note.includes(q) || perf.includes(q) || dateStr.includes(q);
-    });
-  }, [transferSessions, sessionSearch, locations]);
+    let sessions = transferSessions;
+
+    if (dateFrom) {
+      sessions = sessions.filter(s => new Date(s.date || 0) >= new Date(dateFrom));
+    }
+    if (dateTo) {
+      const end = new Date(dateTo);
+      end.setHours(23, 59, 59, 999);
+      sessions = sessions.filter(s => new Date(s.date || 0) <= end);
+    }
+
+    if (sessionSearch.trim()) {
+      const q = sessionSearch.toLowerCase().trim();
+      sessions = sessions.filter(s => {
+        const fromName = getLocationName(s.from_location).toLowerCase();
+        const toName = getLocationName(s.to_location).toLowerCase();
+        const note = s.notes?.toLowerCase() ?? '';
+        const perf = s.performed_by?.toLowerCase() ?? '';
+        const dateStr = format(new Date(s.date), 'MMM dd, yyyy').toLowerCase();
+        return fromName.includes(q) || toName.includes(q) || note.includes(q) || perf.includes(q) || dateStr.includes(q);
+      });
+    }
+    return sessions;
+  }, [transferSessions, sessionSearch, dateFrom, dateTo, locations]);
 
   const filteredFixItems = useMemo(() => {
     const q = fixModalSearch.trim().toLowerCase();
@@ -250,6 +277,32 @@ export default function Transfers() {
                 Clear
               </button>
             )}
+            
+            <div className="h-6 w-px bg-gray-200 mx-2 hidden md:block"></div>
+            <div className="hidden md:flex items-center gap-2">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Date:</span>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={e => setDateFrom(e.target.value)}
+                className="text-xs border border-gray-200 rounded px-2 py-1 outline-none focus:border-primary"
+              />
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">to</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={e => setDateTo(e.target.value)}
+                className="text-xs border border-gray-200 rounded px-2 py-1 outline-none focus:border-primary"
+              />
+              {(dateFrom || dateTo) && (
+                <button
+                  onClick={() => { setDateFrom(''); setDateTo(''); }}
+                  className="text-xs text-gray-400 hover:text-gray-600 font-bold uppercase ml-2"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Sessions List */}
@@ -259,6 +312,7 @@ export default function Transfers() {
                 <thead className="bg-gray-50/50 text-[10px] uppercase text-gray-400 font-black tracking-widest">
                   <tr>
                     <th className="px-6 py-4">Date & Time</th>
+                    <th className="px-6 py-4">Transfer Ref</th>
                     <th className="px-6 py-4">From (Source)</th>
                     <th className="px-6 py-4">To (Destination)</th>
                     <th className="px-6 py-4 text-center">Items</th>
@@ -271,7 +325,7 @@ export default function Transfers() {
                 <tbody className="divide-y divide-gray-50 bg-white">
                   {filteredSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-6 py-20 text-center flex flex-col items-center justify-center">
+                      <td colSpan={9} className="px-6 py-20 text-center flex flex-col items-center justify-center">
                         <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4 mx-auto">
                           <ArrowRightLeft className="w-8 h-8 opacity-10" />
                         </div>
@@ -287,6 +341,19 @@ export default function Transfers() {
                           <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest tabular-nums mt-0.5">
                             {format(new Date(session.date), 'HH:mm')}
                           </p>
+                        </td>
+                        {/* Transfer Reference column */}
+                        <td className="px-6 py-5">
+                          {session.notes ? (
+                            <div className="flex flex-col gap-1">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-50 text-indigo-700 text-[10px] font-black uppercase tracking-widest rounded-lg border border-indigo-100 w-fit">
+                                <FileText className="w-3 h-3 flex-shrink-0" />
+                                {session.notes}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-gray-300 font-bold uppercase">—</span>
+                          )}
                         </td>
                         <td className="px-6 py-5 font-bold text-gray-700">
                           {getLocationName(session.from_location)}
@@ -742,11 +809,54 @@ export default function Transfers() {
               </table>
             </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+            <div className="flex flex-col sm:flex-row items-center justify-between pt-4 border-t border-gray-100 gap-4">
               <span className="text-xs font-bold text-gray-500">
                 <span className="font-extrabold text-primary">{fixItems.filter(r => r.diff !== 0).length}</span> item(s) adjusted
               </span>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setFixSaving(true);
+                    try {
+                      const { exportFixStocksReport } = await import('../lib/bulkOperations');
+                      await exportFixStocksReport({
+                        filename: `Transfer_Fix_Report_Full_${new Date().toISOString().split('T')[0]}`,
+                        items: fixItems,
+                        adjustedOnly: false
+                      });
+                    } catch (e: any) {
+                      alert('Export failed: ' + e.message);
+                    } finally {
+                      setFixSaving(false);
+                    }
+                  }}
+                  className="btn-secondary text-xs h-10 px-3 font-bold border-purple-200 hover:bg-purple-50 hover:text-purple-600 flex items-center gap-2"
+                >
+                  <FileText className="w-3 h-3" /> Full Report
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setFixSaving(true);
+                    try {
+                      const { exportFixStocksReport } = await import('../lib/bulkOperations');
+                      await exportFixStocksReport({
+                        filename: `Transfer_Fix_Report_Adjusted_${new Date().toISOString().split('T')[0]}`,
+                        items: fixItems,
+                        adjustedOnly: true
+                      });
+                    } catch (e: any) {
+                      alert('Export failed: ' + e.message);
+                    } finally {
+                      setFixSaving(false);
+                    }
+                  }}
+                  className="btn-secondary text-xs h-10 px-3 font-bold border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 flex items-center gap-2"
+                >
+                  <FileText className="w-3 h-3" /> Adjusted Only
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setIsFixModalOpen(false)}

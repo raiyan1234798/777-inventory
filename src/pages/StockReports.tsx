@@ -10,8 +10,10 @@ export default function StockReports() {
   const [selectedBrand, setSelectedBrand] = useState<string>('all');
   const today = new Date().toISOString().split('T')[0];
   const [targetDate, setTargetDate] = useState(today);
+  const [searchQuery, setSearchQuery] = useState('');
   const [exporting, setExporting] = useState(false);
   const [showEmptyStock, setShowEmptyStock] = useState(false);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
 
   // Dynamically pull ALL warehouses and ALL shops — so any future additions appear automatically
   const warehouses = locations.filter(l => l.type === 'warehouse');
@@ -109,11 +111,17 @@ export default function StockReports() {
   // Build the preview rows
   const sortedItems = [...items]
     .filter(item => selectedBrand === 'all' || item.brand_id === selectedBrand)
+    .filter(item => {
+      if (!searchQuery) return true;
+      const q = searchQuery.toLowerCase();
+      return (item.name?.toLowerCase().includes(q) || item.sku?.toLowerCase().includes(q));
+    })
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   const previewRows = (() => {
     const rows: Array<{
       slNo: number;
+      itemId: string;
       itemName: string;
       sku: string;
       locationName: string;
@@ -130,18 +138,36 @@ export default function StockReports() {
         sortedItems.forEach(item => {
           const row = getItemStockRow(item, loc.id);
           if (!showEmptyStock && row.opening === 0 && row.closing === 0 && row.received === 0 && row.supplied === 0 && row.returned === 0) return;
-          rows.push({ slNo: slNo++, itemName: item.name || '-', sku: item.sku || '-', locationName: loc.name, ...row });
+          rows.push({ slNo: slNo++, itemId: item.id, itemName: item.name || '-', sku: item.sku || '-', locationName: loc.name, ...row });
         });
       });
     } else {
       sortedItems.forEach(item => {
         const row = getItemStockRow(item, selectedLocation);
         if (!showEmptyStock && row.opening === 0 && row.closing === 0 && row.received === 0 && row.supplied === 0 && row.returned === 0) return;
-        rows.push({ slNo: slNo++, itemName: item.name || '-', sku: item.sku || '-', locationName: selectedName, ...row });
+        rows.push({ slNo: slNo++, itemId: item.id, itemName: item.name || '-', sku: item.sku || '-', locationName: selectedName, ...row });
       });
     }
     return rows;
   })();
+
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      setSelectedItemIds(new Set(previewRows.map(r => r.itemId)));
+    } else {
+      setSelectedItemIds(new Set());
+    }
+  };
+
+  const toggleItemSelection = (id: string) => {
+    const next = new Set(selectedItemIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedItemIds(next);
+  };
 
   // Summary stats
   const totalItems = selectedLocation === 'all'
@@ -167,7 +193,9 @@ export default function StockReports() {
     try {
       setExporting(true);
       const dateTo = targetDate || today;
-      const filteredItems = selectedBrand === 'all' ? items : items.filter(i => i.brand_id === selectedBrand);
+      const filteredItems = selectedItemIds.size > 0 
+        ? sortedItems.filter(i => selectedItemIds.has(i.id))
+        : sortedItems;
 
       await exportStockReport({
         locationId: selectedLocation, 
@@ -187,7 +215,9 @@ export default function StockReports() {
     try {
       setExporting(true);
       const date = targetDate || today;
-      const filteredItems = selectedBrand === 'all' ? items : items.filter(i => i.brand_id === selectedBrand);
+      const filteredItems = selectedItemIds.size > 0 
+        ? sortedItems.filter(i => selectedItemIds.has(i.id))
+        : sortedItems;
 
       if (selectedLocation === 'all') {
         // Print all locations stock report
@@ -226,7 +256,7 @@ export default function StockReports() {
             className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-6 py-3 bg-primary text-white rounded-xl font-bold transition-all hover:bg-primary/90 shadow-lg shadow-primary/20 disabled:opacity-50"
           >
             <Download className="w-5 h-5" />
-            {exporting ? 'Generating…' : `Excel: ${selectedName}`}
+            {exporting ? 'Generating…' : selectedItemIds.size > 0 ? `Excel (${selectedItemIds.size} Selected)` : `Excel: ${selectedName}`}
           </button>
           <button
             onClick={handlePdfExport}
@@ -234,7 +264,7 @@ export default function StockReports() {
             className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-6 py-3 bg-white border-2 border-black text-black rounded-xl font-bold transition-all hover:bg-gray-50 active:scale-95 shadow-lg disabled:opacity-50"
           >
             <FileText className="w-5 h-5" />
-            {exporting ? 'Generating…' : `PDF: ${selectedName}`}
+            {exporting ? 'Generating…' : selectedItemIds.size > 0 ? `PDF (${selectedItemIds.size} Selected)` : `PDF: ${selectedName}`}
           </button>
         </div>
       </div>
@@ -275,6 +305,17 @@ export default function StockReports() {
             </select>
           </div>
 
+          <div className="flex-1">
+            <label className="block text-xs font-bold text-gray-600 mb-2">Search Items</label>
+            <input
+              type="text"
+              placeholder="Search name or SKU..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium focus:outline-none focus:border-primary bg-white"
+            />
+          </div>
+
           <div>
             <label className="block text-xs font-bold text-gray-600 mb-2">Target Date (Snapshot)</label>
             <input
@@ -300,7 +341,7 @@ export default function StockReports() {
           </div>
 
           <button
-            onClick={() => { setTargetDate(today); setSelectedLocation('all'); setSelectedBrand('all'); setShowEmptyStock(false); }}
+            onClick={() => { setTargetDate(today); setSelectedLocation('all'); setSelectedBrand('all'); setSearchQuery(''); setShowEmptyStock(false); setSelectedItemIds(new Set()); }}
             className="px-4 py-2.5 text-sm font-bold text-gray-900 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
           >
             Reset Filters
@@ -344,6 +385,14 @@ export default function StockReports() {
           <table className="w-full text-sm min-w-[800px]">
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
+                <th className="px-3 py-3 w-10 text-center">
+                  <input 
+                    type="checkbox" 
+                    checked={previewRows.length > 0 && selectedItemIds.size === previewRows.length}
+                    onChange={handleSelectAll}
+                    className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary cursor-pointer"
+                  />
+                </th>
                 <th className="px-3 py-3 text-center font-bold text-gray-600 w-12">SL NO.</th>
                 <th className="px-4 py-3 text-left font-bold text-gray-600">ITEM DESCRIPTION</th>
                 <th className="px-3 py-3 text-center font-bold text-gray-600">CODE #</th>
@@ -359,7 +408,15 @@ export default function StockReports() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {previewRows.map((row, idx) => (
-                <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                <tr key={idx} className={`hover:bg-gray-50 transition-colors ${selectedItemIds.has(row.itemId) ? 'bg-blue-50/50' : ''}`}>
+                  <td className="px-3 py-2.5 text-center">
+                    <input 
+                      type="checkbox" 
+                      checked={selectedItemIds.has(row.itemId)}
+                      onChange={() => toggleItemSelection(row.itemId)}
+                      className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary cursor-pointer"
+                    />
+                  </td>
                   <td className="px-3 py-2.5 text-center text-gray-500 text-xs">{row.slNo}</td>
                   <td className="px-4 py-2.5 font-medium text-gray-900">{row.itemName.toUpperCase()}</td>
                   <td className="px-3 py-2.5 text-center text-gray-500 text-xs font-mono">{row.sku}</td>

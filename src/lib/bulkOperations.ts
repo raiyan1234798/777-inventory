@@ -151,11 +151,28 @@ export async function exportInventorySystemData(data: {
   locations: any[];
   items: any[];
   brands: any[];
+  filters?: {
+    locationId?: string;
+    brandId?: string;
+    categoryId?: string;
+  };
+  currency?: string;
 }) {
-  const { inventory, sales, returns, expenses, locations, items } = data;
+  const { inventory, sales, returns, expenses, locations, items, filters, currency = 'USD' } = data;
+
+  // Apply filters to items
+  let filteredItems = items;
+  if (filters?.brandId) filteredItems = filteredItems.filter(i => i.brand_id === filters.brandId);
+  if (filters?.categoryId) filteredItems = filteredItems.filter(i => i.category === filters.categoryId);
+
+  const filteredItemIds = new Set(filteredItems.map(i => i.id));
+
+  // Apply filters to inventory
+  let filteredInventory = inventory.filter(e => filteredItemIds.has(e.item_id));
+  if (filters?.locationId) filteredInventory = filteredInventory.filter(e => e.location_id === filters.locationId);
 
   const dataSheets: Record<string, any[]> = {
-    'Current Stock': (inventory || []).map(e => {
+    'Current Stock': (filteredInventory || []).map(e => {
       const item = (items || []).find(i => i.id === e.item_id);
       const loc = (locations || []).find(l => l.id === e.location_id);
       const qty = e.quantity || 0;
@@ -167,22 +184,28 @@ export async function exportInventorySystemData(data: {
         'Location': loc?.name || e.location_id || 'Unknown',
         'Location Type': loc?.type || '',
         'Quantity': qty,
-        'Avg Cost (INR)': cost.toFixed(2),
-        'Retail Price (INR)': (item?.retail_price || 0).toFixed(2),
-        'Value (INR)': (qty * cost).toFixed(2)
+        [`Avg Cost (${currency})`]: cost.toFixed(2),
+        [`Retail Price (${currency})`]: (item?.retail_price || 0).toFixed(2),
+        [`Value (${currency})`]: (qty * cost).toFixed(2)
       };
     }),
-    'Sales Log': (sales || []).map(s => ({
-      'Date': s.timestamp ? new Date(s.timestamp).toLocaleDateString() : '-',
-      'Item': s.item_name || 'Unknown',
-      'Location': (locations || []).find(l => l.id === s.location_id)?.name || 'Unknown',
-      'Qty': s.quantity || 0,
-      'Price': (s.selling_price || 0).toFixed(2),
-      'Total (INR)': (s.converted_price_USD || 0).toFixed(2),
-      'Profit (INR)': (s.profit_USD || 0).toFixed(2),
-      'Sold By': s.sold_by || 'Unknown'
-    })),
-    'Returns Log': (returns || []).map(r => ({
+    'Sales Log': (sales || [])
+      .filter(s => !filters?.locationId || s.location_id === filters.locationId)
+      .filter(s => filteredItemIds.has(s.item_id))
+      .map(s => ({
+        'Date': s.timestamp ? new Date(s.timestamp).toLocaleDateString() : '-',
+        'Item': s.item_name || 'Unknown',
+        'Location': (locations || []).find(l => l.id === s.location_id)?.name || 'Unknown',
+        'Qty': s.quantity || 0,
+        'Price': (s.selling_price || 0).toFixed(2),
+        [`Total (${currency})`]: (s.converted_price_USD || 0).toFixed(2),
+        [`Profit (${currency})`]: (s.profit_USD || 0).toFixed(2),
+        'Sold By': s.sold_by || 'Unknown'
+      })),
+    'Returns Log': (returns || [])
+      .filter(r => !filters?.locationId || r.location_id === filters.locationId)
+      .filter(r => filteredItemIds.has(r.item_id))
+      .map(r => ({
       'Date': r.timestamp ? new Date(r.timestamp).toLocaleDateString() : '-',
       'Item': r.item_name || 'Unknown',
       'Location': (locations || []).find(l => l.id === r.location_id)?.name || 'Unknown',
@@ -190,18 +213,24 @@ export async function exportInventorySystemData(data: {
       'Reason': r.reason || 'No reason provided',
       'Status': r.status || 'pending'
     })),
-    'Expenses': (expenses || []).map(ex => ({
-      'Date': ex.date ? new Date(ex.date).toLocaleDateString() : '-',
-      'Location': (locations || []).find(l => l.id === ex.location_id)?.name || 'Unknown',
-      'Category': ex.category || 'General',
-      'Amount': (ex.amount || 0).toFixed(2),
-      'Currency': ex.currency || 'USD',
-      'Total (INR)': (ex.converted_amount_USD || ex.amount || 0).toFixed(2),
-      'Notes': ex.notes || ''
-    })),
-    'Stock Summary': (locations || []).map(l => {
-      const locInv = (inventory || []).filter(i => i.location_id === l.id);
-      const locSales = (sales || []).filter(s => s.location_id === l.id);
+    'Expenses': (expenses || [])
+      .filter(ex => !filters?.locationId || ex.location_id === filters.locationId)
+      .map(ex => ({
+        'Date': ex.date ? new Date(ex.date).toLocaleDateString() : '-',
+        'Location': (locations || []).find(l => l.id === ex.location_id)?.name || 'Unknown',
+        'Category': ex.category || 'General',
+        'Amount': (ex.amount || 0).toFixed(2),
+        'Currency': ex.currency || 'USD',
+        [`Total (${currency})`]: (ex.converted_amount_USD || ex.amount || 0).toFixed(2),
+        'Notes': ex.notes || ''
+      })),
+    'Stock Summary': (locations || [])
+      .filter(l => !filters?.locationId || l.id === filters.locationId)
+      .map(l => {
+      const locInv = (filteredInventory || []).filter(i => i.location_id === l.id);
+      const locSales = (sales || [])
+        .filter(s => s.location_id === l.id)
+        .filter(s => filteredItemIds.has(s.item_id));
       const totalItems = locInv.reduce((sum, i) => sum + (i.quantity || 0), 0);
       const totalValue = locInv.reduce((sum, i) => sum + (i.quantity || 0) * (i.avg_cost_USD || 0), 0);
       const totalRev = locSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
@@ -211,9 +240,9 @@ export async function exportInventorySystemData(data: {
         'Location': l.name || 'Unknown',
         'Type': l.type || 'N/A',
         'Total Items': totalItems,
-        'Stock Value (INR)': totalValue.toFixed(2),
-        'Total Revenue (INR)': totalRev.toFixed(2),
-        'Total Profit (INR)': totalProfit.toFixed(2),
+        [`Stock Value (${currency})`]: totalValue.toFixed(2),
+        [`Total Revenue (${currency})`]: totalRev.toFixed(2),
+        [`Total Profit (${currency})`]: totalProfit.toFixed(2),
         'Margin %': totalRev > 0 ? ((totalProfit / totalRev) * 100).toFixed(2) : '0.00'
       };
     })
@@ -224,6 +253,220 @@ export async function exportInventorySystemData(data: {
     includeTimestamp: true
   });
 }
+
+
+/**
+ * Export Comprehensive Fix Stocks / Import Reconciliation Report
+ *
+ * Each item row shows:
+ *  - Invoice Qty   : quantity listed in the original import Excel/invoice
+ *  - Received Qty  : quantity actually received & committed to inventory
+ *  - Post-Fix Qty  : current quantity after any manual Fix-Stocks adjustments
+ *  - Net Change    : Post-Fix minus Invoice (overall variance from invoice)
+ *  - Fix Adjustment: Post-Fix minus Received (manual fix delta)
+ *  - Status        : New Item | Not Received | As Invoiced | Over Received | Under Received | Manually Adjusted
+ *
+ * adjustedOnly = true  →  only rows where Post-Fix ≠ Received  (manual fixes)
+ * adjustedOnly = false →  all items including unchanged ones
+ */
+export async function exportFixStocksReport(data: {
+  filename: string;
+  items: any[];          // enriched items from both session card and fix-modal callers
+  adjustedOnly?: boolean;
+  sessionMeta?: {        // optional header metadata
+    fileName?: string;
+    locationName?: string;
+    importDate?: string;
+  };
+}) {
+  const { filename, items, adjustedOnly, sessionMeta } = data;
+
+  // ── Classify each item ─────────────────────────────────────────────────────
+  const enriched = items.map(item => {
+    // Support both caller shapes
+    const invoiceQty   = item.invoiceQty     ?? item.originalReceivedQty ?? 0;
+    const receivedQty  = item.receivedQty    ?? item.originalReceivedQty ?? 0;
+    const postFixQty   = item.newReceivedQty ?? item.newQty ?? receivedQty;
+    const fixDelta     = postFixQty - receivedQty;   // manual fix change
+    const netChange    = postFixQty - invoiceQty;    // total variance from invoice
+
+    let status: string;
+    if (invoiceQty === 0 && postFixQty > 0)  status = 'New Item (Not in Invoice)';
+    else if (invoiceQty === 0 && postFixQty === 0) status = 'Not Received';
+    else if (postFixQty === invoiceQty)             status = 'As Invoiced';
+    else if (postFixQty > invoiceQty)               status = 'Over Received';
+    else                                            status = 'Under Received';
+
+    // Override status if a manual fix was applied on top
+    if (fixDelta !== 0 && status === 'As Invoiced') status = 'Manually Adjusted';
+    if (fixDelta !== 0 && status !== 'As Invoiced') status += ' + Manually Adjusted';
+
+    return {
+      item_name:  item.item_name  || 'Unknown',
+      sku:        item.sku        || '—',
+      brand:      item.brand      || '—',
+      invoiceQty,
+      receivedQty,
+      postFixQty,
+      fixDelta,
+      netChange,
+      status,
+    };
+  });
+
+  // ── Filter ─────────────────────────────────────────────────────────────────
+  const toExport = adjustedOnly
+    ? enriched.filter(i => i.fixDelta !== 0 || i.invoiceQty !== i.receivedQty)
+    : enriched;
+
+  if (toExport.length === 0) {
+    throw new Error('No items to export for the selected filter.');
+  }
+
+  // ── Summary counts ─────────────────────────────────────────────────────────
+  const all = enriched; // always summarise from full list
+  const newItems        = all.filter(i => i.invoiceQty === 0 && i.postFixQty > 0).length;
+  const notReceived     = all.filter(i => i.invoiceQty === 0 && i.postFixQty === 0).length;
+  const asInvoiced      = all.filter(i => i.invoiceQty > 0 && i.postFixQty === i.invoiceQty && i.fixDelta === 0).length;
+  const overReceived    = all.filter(i => i.postFixQty > i.invoiceQty && i.invoiceQty > 0).length;
+  const underReceived   = all.filter(i => i.postFixQty < i.invoiceQty && i.invoiceQty > 0).length;
+  const manuallyFixed   = all.filter(i => i.fixDelta !== 0).length;
+  const totalInvoiced   = all.reduce((s, i) => s + i.invoiceQty, 0);
+  const totalReceived   = all.reduce((s, i) => s + i.receivedQty, 0);
+  const totalPostFix    = all.reduce((s, i) => s + i.postFixQty, 0);
+
+  // ── Build workbook ─────────────────────────────────────────────────────────
+  const XLSX = await import('xlsx');
+  const wb = XLSX.utils.book_new();
+
+  // ── Sheet 1: Detail ────────────────────────────────────────────────────────
+  const detailRows: any[][] = [];
+
+  // Header block
+  detailRows.push(['TRIPLE SEVEN INVESTMENTS LTD']);
+  detailRows.push(['Fix Stocks / Import Reconciliation Report']);
+  if (sessionMeta?.fileName)    detailRows.push(['Import File:', sessionMeta.fileName]);
+  if (sessionMeta?.locationName) detailRows.push(['Location:',   sessionMeta.locationName]);
+  if (sessionMeta?.importDate)  detailRows.push(['Import Date:', sessionMeta.importDate]);
+  detailRows.push(['Generated:', new Date().toLocaleString()]);
+  detailRows.push(['Report Type:', adjustedOnly ? 'Adjusted / Changed Items Only' : 'Full Import Report (All Items)']);
+  detailRows.push([]); // blank row
+
+  // Column headers
+  detailRows.push([
+    '#',
+    'Item Name',
+    'SKU',
+    'Brand',
+    'Invoice Qty',
+    'Received Qty',
+    'Post-Fix Qty',
+    'Fix Adjustment',
+    'Net Change vs Invoice',
+    'Status',
+  ]);
+
+  // Data rows
+  toExport.forEach((item, idx) => {
+    detailRows.push([
+      idx + 1,
+      item.item_name,
+      item.sku,
+      item.brand,
+      item.invoiceQty,
+      item.receivedQty,
+      item.postFixQty,
+      item.fixDelta === 0 ? 0 : (item.fixDelta > 0 ? `+${item.fixDelta}` : item.fixDelta),
+      item.netChange === 0 ? 0 : (item.netChange > 0 ? `+${item.netChange}` : item.netChange),
+      item.status,
+    ]);
+  });
+
+  // Totals row
+  detailRows.push([]);
+  detailRows.push([
+    '',
+    'TOTAL',
+    '',
+    '',
+    toExport.reduce((s, i) => s + i.invoiceQty, 0),
+    toExport.reduce((s, i) => s + i.receivedQty, 0),
+    toExport.reduce((s, i) => s + i.postFixQty, 0),
+    '',
+    '',
+    '',
+  ]);
+
+  const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
+  wsDetail['!cols'] = [
+    { wch: 4 },   // #
+    { wch: 38 },  // Item Name
+    { wch: 14 },  // SKU
+    { wch: 18 },  // Brand
+    { wch: 13 },  // Invoice Qty
+    { wch: 14 },  // Received Qty
+    { wch: 13 },  // Post-Fix Qty
+    { wch: 16 },  // Fix Adjustment
+    { wch: 22 },  // Net Change
+    { wch: 36 },  // Status
+  ];
+  XLSX.utils.book_append_sheet(wb, wsDetail, 'Import Details');
+
+  // ── Sheet 2: Summary ───────────────────────────────────────────────────────
+  const summaryRows: any[][] = [
+    ['TRIPLE SEVEN INVESTMENTS LTD'],
+    ['Fix Stocks Summary'],
+    [],
+    ['Category', 'Count', 'Description'],
+    ['New Item (Not in Invoice)',  newItems,      'Items received that were not listed in the original invoice'],
+    ['Not Received',               notReceived,   'Items with 0 in invoice AND 0 received (possibly placeholder rows)'],
+    ['As Invoiced',                asInvoiced,    'Received quantity exactly matches the invoice quantity'],
+    ['Over Received',              overReceived,  'More stock received than what was listed in the invoice'],
+    ['Under Received',             underReceived, 'Less stock received than what was listed in the invoice'],
+    ['Manually Adjusted (Fix)',    manuallyFixed, 'Items where quantities were corrected via Fix Stocks after receiving'],
+    [],
+    ['Quantity Summary',  '',         ''],
+    ['Total Invoice Qty', totalInvoiced,  'Sum of all invoice quantities'],
+    ['Total Received Qty',totalReceived,  'Sum of all quantities received into inventory'],
+    ['Total Post-Fix Qty',totalPostFix,   'Sum of all quantities after manual Fix-Stocks adjustments'],
+    ['Overall Variance',  totalPostFix - totalInvoiced, 'Post-Fix Qty minus Invoice Qty (+ = more, - = less)'],
+  ];
+
+  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+  wsSummary['!cols'] = [{ wch: 32 }, { wch: 10 }, { wch: 60 }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+  // ── Sheet 3: New & Changed Items (quick view) ──────────────────────────────
+  const changedItems = enriched.filter(i =>
+    i.invoiceQty !== i.postFixQty || i.fixDelta !== 0
+  );
+  if (changedItems.length > 0) {
+    const changedRows: any[][] = [
+      ['TRIPLE SEVEN INVESTMENTS LTD'],
+      ['Changed & New Items Only'],
+      [],
+      ['#', 'Item Name', 'SKU', 'Brand', 'Invoice Qty', 'Post-Fix Qty', 'Net Change', 'Status'],
+    ];
+    changedItems.forEach((item, idx) => {
+      changedRows.push([
+        idx + 1,
+        item.item_name,
+        item.sku,
+        item.brand,
+        item.invoiceQty,
+        item.postFixQty,
+        item.netChange === 0 ? 0 : (item.netChange > 0 ? `+${item.netChange}` : item.netChange),
+        item.status,
+      ]);
+    });
+    const wsChanged = XLSX.utils.aoa_to_sheet(changedRows);
+    wsChanged['!cols'] = [{ wch: 4 }, { wch: 38 }, { wch: 14 }, { wch: 18 }, { wch: 13 }, { wch: 13 }, { wch: 14 }, { wch: 36 }];
+    XLSX.utils.book_append_sheet(wb, wsChanged, 'Changes Only');
+  }
+
+  XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
 
 /**
  * Calculate optimal column widths
@@ -629,7 +872,18 @@ export async function printDailySalesReport777(data: {
   const baseCurrency = useStore.getState().baseCurrency;
 
   // Use the sales data directly as it's already filtered by UI
-  const daySales = sales;
+  // Sort sales by brand name alphabetically
+  const daySales = [...sales].sort((a, b) => {
+    const itemA = items.find(i => i.id === a.item_id);
+    const brandA = brands.find(br => br.id === itemA?.brand_id);
+    const nameA = brandA?.name || '';
+    
+    const itemB = items.find(i => i.id === b.item_id);
+    const brandB = brands.find(br => br.id === itemB?.brand_id);
+    const nameB = brandB?.name || '';
+
+    return nameA.localeCompare(nameB);
+  });
 
   // Calculate stats for BALES vs BAGS/BOXES
   // For now, we group by item category. 
@@ -827,7 +1081,18 @@ export async function exportDailySalesReport777(data: {
   const locationName = location?.name || 'Unknown';
   const baseCurrency = useStore.getState().baseCurrency;
 
-  const daySales = sales;
+  // Sort sales by brand name alphabetically
+  const daySales = [...sales].sort((a, b) => {
+    const itemA = items.find(i => i.id === a.item_id);
+    const brandA = brands.find(br => br.id === itemA?.brand_id);
+    const nameA = brandA?.name || '';
+    
+    const itemB = items.find(i => i.id === b.item_id);
+    const brandB = brands.find(br => br.id === itemB?.brand_id);
+    const nameB = brandB?.name || '';
+
+    return nameA.localeCompare(nameB);
+  });
 
   const filterSummary = (categoryMatch: (cat: string) => boolean) => {
     const relevantSales = daySales.filter(s => {

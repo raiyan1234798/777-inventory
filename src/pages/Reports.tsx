@@ -6,6 +6,7 @@ import { exportDailySalesReport777, printDailySalesReport777 } from '../lib/bulk
 export default function Reports() {
   const { sales, locations, items, brands, inventory, transactions, returns } = useStore();
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
+  const [selectedBrand, setSelectedBrand] = useState<string>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
@@ -26,8 +27,16 @@ export default function Reports() {
     return data.filter(item => item[locationField] === selectedLocation);
   };
 
+  const filterByBrand = (data: any[]) => {
+    if (selectedBrand === 'all') return data;
+    return data.filter(item => {
+      const it = items.find(i => i.id === item.item_id);
+      return it?.brand_id === selectedBrand;
+    });
+  };
+
   // Get filtered data
-  const filteredSales = filterByLocation(filterByDateRange(sales, 'timestamp'), 'location_id');
+  const filteredSales = filterByBrand(filterByLocation(filterByDateRange(sales, 'timestamp'), 'location_id'));
 
   // Calculate totals
   const salesTotal = filteredSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
@@ -68,6 +77,21 @@ export default function Reports() {
             </select>
           </div>
 
+          <div className="flex-1">
+            <label className="block text-xs font-bold text-gray-600 mb-2">Brands</label>
+            <select
+              value={selectedBrand}
+              onChange={(e) => setSelectedBrand(e.target.value)}
+              aria-label="Filter by Brand"
+              className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium focus:outline-none focus:border-primary bg-white"
+            >
+              <option value="all">All Brands</option>
+              {brands.map(brand => (
+                <option key={brand.id} value={brand.id}>{brand.name}</option>
+              ))}
+            </select>
+          </div>
+
           <div>
             <label className="block text-xs font-bold text-gray-600 mb-2">From Date</label>
             <input
@@ -95,6 +119,7 @@ export default function Reports() {
               setFromDate('');
               setToDate('');
               setSelectedLocation('all');
+              setSelectedBrand('all');
             }}
             className="px-4 py-2.5 text-sm font-bold text-gray-900 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
           >

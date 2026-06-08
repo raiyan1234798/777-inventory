@@ -78,7 +78,7 @@ const ImportPreviewRow = memo(({ item, idx, importCurrency, onUpdate, onRemove }
 export default function Warehouse() {
   const { appUser } = useAuthStore();
   const {
-    locations, brands, items, inventory, containers, transactions,
+    locations, brands, items, inventory, containers, transactions, expenses,
     addLocation, deleteLocation, addBrand, deleteBrand, deleteItem, updateItem,
     addContainer, batchStockEntry, transfer, deleteStockEntry, deleteStockEntries,
     deleteItems, deleteContainers, deleteLocations, deleteBrands,
@@ -130,6 +130,12 @@ export default function Warehouse() {
   const [adjustInvoiceContainer, setAdjustInvoiceContainer] = useState<string | null>(null);
   const [adjustInvoiceItems, setAdjustInvoiceItems] = useState<{ transaction_id: string; name: string; original_qty: number; new_quantity: number }[]>([]);
   const [activeStep, setActiveStep] = useState(1);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportFilters, setExportFilters] = useState({ locationId: '', brandId: '', categoryId: '' });
+  // Export All filter modal state
+  const [exportAllModalOpen, setExportAllModalOpen] = useState(false);
+  const [exportAllFilters, setExportAllFilters] = useState({ brandId: '', locationType: '' as '' | 'warehouse' | 'shop', locationId: '' });
+  const [exportAllLoading, setExportAllLoading] = useState(false);
   const [addStockMode, setAddStockMode] = useState<'existing' | 'new'>('existing');
   const [addStockForm, setAddStockForm] = useState({
     // existing item mode
@@ -151,6 +157,7 @@ export default function Warehouse() {
     to_location: '',
     item_id: '',
     quantity: 1,
+    notes: '',
   });
 
   const [showQuickAddItem, setShowQuickAddItem] = useState(false);
@@ -803,7 +810,7 @@ export default function Warehouse() {
         performed_by: appUser?.name ?? 'Admin',
       });
       setTransferModal(false);
-      setTransferForm({ from_location: '', to_location: '', item_id: '', quantity: 1 });
+      setTransferForm({ from_location: '', to_location: '', item_id: '', quantity: 1, notes: '' });
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -1071,26 +1078,12 @@ export default function Warehouse() {
         </div>
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
           <button 
-            disabled={exporting}
-            onClick={async () => {
-              setExporting(true);
-              try {
-                await exportInventorySystemData({
-                  inventory, sales: useStore.getState().sales, 
-                  returns: useStore.getState().returns, 
-                  expenses: useStore.getState().expenses, 
-                  locations, items, brands
-                });
-              } catch (err: any) {
-                alert('Export failed: ' + err.message);
-              } finally {
-                setExporting(false);
-              }
-            }} 
+            disabled={exporting || exportAllLoading}
+            onClick={() => { setExportAllFilters({ brandId: '', locationType: '', locationId: '' }); setExportAllModalOpen(true); }}
             className="btn-secondary flex items-center gap-2 text-sm justify-center border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 transition-all font-bold disabled:opacity-50"
           >
             <FileText className="w-4 h-4" />
-            <span className="whitespace-nowrap">{exporting ? 'Exporting...' : 'Export All'}</span>
+            <span className="whitespace-nowrap">{exportAllLoading ? 'Exporting...' : 'Export All'}</span>
           </button>
 
           {filterLocation && (
@@ -1547,7 +1540,7 @@ export default function Warehouse() {
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1.5">
                           <button title="Edit Item & Costs" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: Number(fromUSD(r.item.retail_price || 0, 'ZMW').toFixed(2)), stock: r.quantity, inventory_id: r.id, location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
-                          <button title="Transfer Stock" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1 }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-3.5 h-3.5" /></button>
+                          <button title="Transfer Stock" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1, notes: '' }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-3.5 h-3.5" /></button>
                           <button
                             disabled={saving}
                             title="Delete From Location"
@@ -1623,7 +1616,7 @@ export default function Warehouse() {
                         </div>
                         <div className="flex gap-1.5 flex-shrink-0">
                           <button title="Edit" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: Number(fromUSD(r.item.retail_price || 0, 'ZMW').toFixed(2)), stock: r.quantity, inventory_id: r.id, location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
-                          <button title="Transfer" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1 }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-4 h-4" /></button>
+                          <button title="Transfer" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1, notes: '' }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-4 h-4" /></button>
                           <button
                              disabled={saving}
                              title="Delete"
@@ -2510,13 +2503,78 @@ export default function Warehouse() {
                           </div>
 
                           {/* Right: actions */}
-                          <div className="flex items-center gap-2 flex-shrink-0">
+                          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
                             <button
                               onClick={() => setExpandedSessions(p => ({ ...p, [session.id]: !p[session.id] }))}
                               className="px-3 py-2 bg-gray-100 text-gray-700 text-xs font-bold rounded-xl hover:bg-gray-200 transition-all shadow-sm"
                             >
                               {expandedSessions[session.id] ? 'Hide Items' : 'View Items'}
                             </button>
+                            {/* Fix Stocks Report download buttons */}
+                            <div className="flex items-center gap-1">
+                              <button
+                                title="Download Full Fix Stocks Report (all items, all statuses)"
+                                onClick={async () => {
+                                  try {
+                                    const { exportFixStocksReport } = await import('../lib/bulkOperations');
+                                    const loc = locations.find(l => l.id === session.location_id);
+                                    // Pass raw session items — the export function normalises field names
+                                    const reportItems = session.items.map((it: any) => ({
+                                      item_name:      it.item_name,
+                                      sku:            it.sku,
+                                      brand:          it.brand,
+                                      invoiceQty:     it.invoiceQty   ?? 0,
+                                      receivedQty:    it.receivedQty  ?? 0,
+                                      // newReceivedQty = same as receivedQty when downloaded from card (no live fix open)
+                                      newReceivedQty: it.receivedQty  ?? 0,
+                                    }));
+                                    await exportFixStocksReport({
+                                      filename: `FixStocks_Full_${session.fileName.replace(/[^a-zA-Z0-9]/g, '_')}`,
+                                      items: reportItems,
+                                      adjustedOnly: false,
+                                      sessionMeta: {
+                                        fileName:     session.fileName,
+                                        locationName: loc?.name ?? session.location_id,
+                                        importDate:   new Date(session.date).toLocaleString(),
+                                      }
+                                    });
+                                  } catch (e: any) { alert('Export failed: ' + e.message); }
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-2 bg-purple-50 text-purple-700 text-xs font-bold rounded-xl hover:bg-purple-100 transition-all shadow-sm border border-purple-100"
+                              >
+                                <FileText className="w-3 h-3" /> Full Report
+                              </button>
+                              <button
+                                title="Download Changed & New Items Report only"
+                                onClick={async () => {
+                                  try {
+                                    const { exportFixStocksReport } = await import('../lib/bulkOperations');
+                                    const loc = locations.find(l => l.id === session.location_id);
+                                    const reportItems = session.items.map((it: any) => ({
+                                      item_name:      it.item_name,
+                                      sku:            it.sku,
+                                      brand:          it.brand,
+                                      invoiceQty:     it.invoiceQty   ?? 0,
+                                      receivedQty:    it.receivedQty  ?? 0,
+                                      newReceivedQty: it.receivedQty  ?? 0,
+                                    }));
+                                    await exportFixStocksReport({
+                                      filename: `FixStocks_Changed_${session.fileName.replace(/[^a-zA-Z0-9]/g, '_')}`,
+                                      items: reportItems,
+                                      adjustedOnly: true,   // only changed/new items
+                                      sessionMeta: {
+                                        fileName:     session.fileName,
+                                        locationName: loc?.name ?? session.location_id,
+                                        importDate:   new Date(session.date).toLocaleString(),
+                                      }
+                                    });
+                                  } catch (e: any) { alert('Export failed: ' + e.message); }
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-xl hover:bg-emerald-100 transition-all shadow-sm border border-emerald-100"
+                              >
+                                <FileText className="w-3 h-3" /> Changed
+                              </button>
+                            </div>
                             <button
                               onClick={() => openFixModal(session)}
                               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 transition-all shadow-sm hover:shadow-md"
@@ -2865,11 +2923,67 @@ export default function Warehouse() {
                     </div>
 
                     {/* Summary footer */}
-                    <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3 border border-gray-150">
+                    <div className="flex flex-col sm:flex-row items-center justify-between bg-gray-50 rounded-xl px-4 py-3 border border-gray-150 gap-4">
                       <div className="text-xs text-gray-500">
                         <span className="font-bold text-indigo-600">{fixItems.filter(r => r.diff !== 0).length}</span> item(s) will be changed
                       </div>
-                      <div className="flex gap-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setFixSaving(true);
+                            try {
+                              const { exportFixStocksReport } = await import('../lib/bulkOperations');
+                              const loc = locations.find(l => l.id === selectedSession?.location_id);
+                              await exportFixStocksReport({
+                                filename: `Import_Fix_Report_Full_${new Date().toISOString().split('T')[0]}`,
+                                // fixItems already has invoiceQty, originalReceivedQty, newReceivedQty
+                                items: fixItems,
+                                adjustedOnly: false,
+                                sessionMeta: {
+                                  fileName:     selectedSession?.fileName,
+                                  locationName: loc?.name ?? selectedSession?.location_id,
+                                  importDate:   selectedSession ? new Date(selectedSession.date).toLocaleString() : undefined,
+                                }
+                              });
+                            } catch (e: any) {
+                              alert('Export failed: ' + e.message);
+                            } finally {
+                              setFixSaving(false);
+                            }
+                          }}
+                          className="btn-secondary text-xs h-9 px-3 font-bold border-purple-200 hover:bg-purple-50 hover:text-purple-600 flex items-center gap-2"
+                        >
+                          <FileText className="w-3 h-3" /> Full Report
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setFixSaving(true);
+                            try {
+                              const { exportFixStocksReport } = await import('../lib/bulkOperations');
+                              const loc = locations.find(l => l.id === selectedSession?.location_id);
+                              await exportFixStocksReport({
+                                filename: `Import_Fix_Report_Changed_${new Date().toISOString().split('T')[0]}`,
+                                items: fixItems,
+                                adjustedOnly: true,
+                                sessionMeta: {
+                                  fileName:     selectedSession?.fileName,
+                                  locationName: loc?.name ?? selectedSession?.location_id,
+                                  importDate:   selectedSession ? new Date(selectedSession.date).toLocaleString() : undefined,
+                                }
+                              });
+                            } catch (e: any) {
+                              alert('Export failed: ' + e.message);
+                            } finally {
+                              setFixSaving(false);
+                            }
+                          }}
+                          className="btn-secondary text-xs h-9 px-3 font-bold border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 flex items-center gap-2"
+                        >
+                          <FileText className="w-3 h-3" /> Changed Only
+                        </button>
+
                         <button type="button" onClick={() => { setIsFixModalOpen(false); setIsFixModalMinimized(false); }} className="px-4 py-2 text-sm font-medium text-gray-650 bg-white border border-gray-200 rounded-xl hover:bg-gray-50">
                           Cancel
                         </button>
@@ -3576,9 +3690,15 @@ export default function Warehouse() {
               })}
             </select>
           </div>
-          <div>
-            <label className="label">Quantity</label>
-            <input title="Quantity to Move" required type="number" min={1} max={inventory.find(e => e.location_id === transferForm.from_location && e.item_id === transferForm.item_id)?.quantity} className="input-field" value={transferForm.quantity || ''} onChange={e => setTransferForm(f => ({ ...f, quantity: Number(e.target.value) }))} />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Quantity</label>
+              <input title="Quantity to Move" required type="number" min={1} max={inventory.find(e => e.location_id === transferForm.from_location && e.item_id === transferForm.item_id)?.quantity} className="input-field" value={transferForm.quantity || ''} onChange={e => setTransferForm(f => ({ ...f, quantity: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <label className="label">Delivery Note (Optional)</label>
+              <input title="Delivery Note or Reference" type="text" placeholder="e.g. TR-2023-01" className="input-field" value={transferForm.notes || ''} onChange={e => setTransferForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
           </div>
           <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
             <button type="button" className="btn-secondary" onClick={() => setTransferModal(false)}>Cancel</button>
@@ -3853,6 +3973,112 @@ export default function Warehouse() {
           </div>
         </div>
       </Modal>
+
+
+      {/* ── Export All Filter Modal ── */}
+      {exportAllModalOpen && (
+        <Modal isOpen onClose={() => setExportAllModalOpen(false)} title="Export All Stock" size="sm">
+          <div className="space-y-5">
+            <p className="text-sm text-gray-500">Filter the export by brand and/or location before downloading the Excel file.</p>
+
+            {/* Brand filter */}
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">Brand (Optional)</label>
+              <select
+                value={exportAllFilters.brandId}
+                onChange={e => setExportAllFilters(f => ({ ...f, brandId: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm font-medium focus:outline-none focus:border-primary bg-white"
+              >
+                <option value="">All Brands</option>
+                {brands.map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Location type filter */}
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">Location Type</label>
+              <div className="flex gap-2">
+                {(['', 'warehouse', 'shop'] as const).map(type => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => setExportAllFilters(f => ({ ...f, locationType: type, locationId: '' }))}
+                    className={`flex-1 py-2 text-xs font-bold rounded-xl border transition-all ${exportAllFilters.locationType === type ? 'bg-primary text-white border-primary' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+                  >
+                    {type === '' ? 'All' : type === 'warehouse' ? '🏭 Warehouses' : '🏪 Shops'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Specific location */}
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">Specific Location (Optional)</label>
+              <select
+                value={exportAllFilters.locationId}
+                onChange={e => setExportAllFilters(f => ({ ...f, locationId: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm font-medium focus:outline-none focus:border-primary bg-white"
+              >
+                <option value="">All Locations</option>
+                {locations
+                  .filter(l => !exportAllFilters.locationType || l.type === exportAllFilters.locationType)
+                  .map(l => (
+                    <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
+                  ))}
+              </select>
+            </div>
+
+            {/* Summary */}
+            <div className="bg-gray-50 rounded-xl p-3 text-xs text-gray-500">
+              <p className="font-bold text-gray-700 mb-1">Export will include:</p>
+              <p>• Brand: {exportAllFilters.brandId ? brands.find(b => b.id === exportAllFilters.brandId)?.name : 'All'}</p>
+              <p>• Location: {exportAllFilters.locationId ? locations.find(l => l.id === exportAllFilters.locationId)?.name : (exportAllFilters.locationType ? `All ${exportAllFilters.locationType}s` : 'All Locations')}</p>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2 border-t border-gray-100">
+              <button type="button" onClick={() => setExportAllModalOpen(false)} className="px-5 py-2.5 font-bold text-gray-700 border border-gray-200 rounded-xl hover:bg-gray-50 text-sm">Cancel</button>
+              <button
+                type="button"
+                disabled={exportAllLoading}
+                onClick={async () => {
+                  setExportAllLoading(true);
+                  try {
+                    // Build filtered data
+                    const filteredLocs = exportAllFilters.locationId
+                      ? locations.filter(l => l.id === exportAllFilters.locationId)
+                      : (exportAllFilters.locationType ? locations.filter(l => l.type === exportAllFilters.locationType) : locations);
+
+                    await exportInventorySystemData({
+                      inventory,
+                      sales: useStore.getState().sales,
+                      returns: useStore.getState().returns,
+                      expenses: useStore.getState().expenses,
+                      locations: filteredLocs,
+                      items,
+                      brands,
+                      filters: {
+                        locationId: exportAllFilters.locationId || undefined,
+                        brandId: exportAllFilters.brandId || undefined,
+                      }
+                    });
+                    setExportAllModalOpen(false);
+                  } catch (err: any) {
+                    alert('Export failed: ' + err.message);
+                  } finally {
+                    setExportAllLoading(false);
+                  }
+                }}
+                className="btn-primary flex items-center gap-2 px-6 py-2.5 text-sm font-bold disabled:opacity-50"
+              >
+                <FileText className="w-4 h-4" />
+                {exportAllLoading ? 'Exporting...' : 'Download Excel'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
