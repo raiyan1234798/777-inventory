@@ -14,6 +14,7 @@ export default function StockReports() {
   const [exporting, setExporting] = useState(false);
   const [showEmptyStock, setShowEmptyStock] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [activeMetric, setActiveMetric] = useState<'all' | 'opening' | 'received' | 'supplied' | 'returned' | 'closing'>('all');
 
   // Dynamically pull ALL warehouses and ALL shops — so any future additions appear automatically
   const warehouses = locations.filter(l => l.type === 'warehouse');
@@ -118,7 +119,7 @@ export default function StockReports() {
     })
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  const previewRows = (() => {
+  const basePreviewRows = (() => {
     const rows: Array<{
       slNo: number;
       itemId: string;
@@ -151,9 +152,19 @@ export default function StockReports() {
     return rows;
   })();
 
+  const displayedRows = basePreviewRows.filter(row => {
+    if (activeMetric === 'all') return true;
+    if (activeMetric === 'opening') return row.opening > 0;
+    if (activeMetric === 'received') return row.received > 0;
+    if (activeMetric === 'supplied') return row.supplied > 0;
+    if (activeMetric === 'returned') return row.returned > 0;
+    if (activeMetric === 'closing') return row.closing > 0;
+    return true;
+  });
+
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
-      setSelectedItemIds(new Set(previewRows.map(r => r.itemId)));
+      setSelectedItemIds(new Set(displayedRows.map(r => r.itemId)));
     } else {
       setSelectedItemIds(new Set());
     }
@@ -174,10 +185,10 @@ export default function StockReports() {
     ? new Set(inventory.filter(i => selectedBrand === 'all' || items.find(it => it.id === i.item_id)?.brand_id === selectedBrand).map(i => i.item_id)).size
     : new Set(inventory.filter(i => i.location_id === selectedLocation && (selectedBrand === 'all' || items.find(it => it.id === i.item_id)?.brand_id === selectedBrand)).map(i => i.item_id)).size;
   
-  const totalOpening = previewRows.reduce((s, r) => s + r.opening, 0);
-  const totalReceived = previewRows.reduce((s, r) => s + r.received, 0);
-  const totalSupplied = previewRows.reduce((s, r) => s + r.supplied, 0);
-  const totalClosingQty = previewRows.reduce((s, r) => s + r.closing, 0);
+  const totalOpening = basePreviewRows.reduce((s, r) => s + r.opening, 0);
+  const totalReceived = basePreviewRows.reduce((s, r) => s + r.received, 0);
+  const totalSupplied = basePreviewRows.reduce((s, r) => s + r.supplied, 0);
+  const totalClosingQty = basePreviewRows.reduce((s, r) => s + r.closing, 0);
 
   const itemsMap = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
   const inventoryValue = inventory
@@ -351,26 +362,41 @@ export default function StockReports() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-gray-50 border border-gray-100 rounded-xl p-4">
+        <button 
+          onClick={() => setActiveMetric(activeMetric === 'opening' ? 'all' : 'opening')}
+          className={`text-left bg-gray-50 border rounded-xl p-4 transition-all ${activeMetric === 'opening' ? 'border-gray-500 ring-2 ring-gray-200 shadow-md' : 'border-gray-100 hover:border-gray-300'}`}
+        >
           <p className="text-[10px] font-bold text-gray-500 uppercase mb-1">Opening Balance</p>
           <p className="text-xl font-black text-gray-900">{totalOpening.toLocaleString('en-IN')}</p>
-        </div>
-        <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+        </button>
+        <button 
+          onClick={() => setActiveMetric(activeMetric === 'received' ? 'all' : 'received')}
+          className={`text-left bg-blue-50 border rounded-xl p-4 transition-all ${activeMetric === 'received' ? 'border-blue-500 ring-2 ring-blue-200 shadow-md' : 'border-blue-100 hover:border-blue-300'}`}
+        >
           <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">Stock Received (+)</p>
           <p className="text-xl font-black text-blue-900">{totalReceived.toLocaleString('en-IN')}</p>
-        </div>
-        <div className="bg-red-50 border border-red-100 rounded-xl p-4">
+        </button>
+        <button 
+          onClick={() => setActiveMetric(activeMetric === 'supplied' ? 'all' : 'supplied')}
+          className={`text-left bg-red-50 border rounded-xl p-4 transition-all ${activeMetric === 'supplied' ? 'border-red-500 ring-2 ring-red-200 shadow-md' : 'border-red-100 hover:border-red-300'}`}
+        >
           <p className="text-[10px] font-bold text-red-600 uppercase mb-1">Stock Supplied (-)</p>
           <p className="text-xl font-black text-red-900">{totalSupplied.toLocaleString('en-IN')}</p>
-        </div>
-        <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4">
+        </button>
+        <button 
+          onClick={() => setActiveMetric(activeMetric === 'closing' ? 'all' : 'closing')}
+          className={`text-left bg-emerald-50 border rounded-xl p-4 transition-all ${activeMetric === 'closing' ? 'border-emerald-500 ring-2 ring-emerald-200 shadow-md' : 'border-emerald-100 hover:border-emerald-300'}`}
+        >
           <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Closing Balance (=)</p>
           <p className="text-xl font-black text-emerald-900">{totalClosingQty.toLocaleString('en-IN')}</p>
-        </div>
-        <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 col-span-2 lg:col-span-1">
+        </button>
+        <button 
+          onClick={() => setActiveMetric(activeMetric === 'closing' ? 'all' : 'closing')}
+          className={`text-left bg-purple-50 border rounded-xl p-4 col-span-2 lg:col-span-1 transition-all ${activeMetric === 'closing' ? 'border-purple-500 ring-2 ring-purple-200 shadow-md' : 'border-purple-100 hover:border-purple-300'}`}
+        >
           <p className="text-[10px] font-bold text-purple-600 uppercase mb-1">Total Stock Value</p>
           <p className="text-xl font-black text-purple-900">${inventoryValue.toLocaleString('en-IN')}</p>
-        </div>
+        </button>
       </div>
 
       {/* Preview Table — mirrors Excel/PDF exactly */}
@@ -379,7 +405,7 @@ export default function StockReports() {
           <span className="text-xs font-bold text-gray-600 uppercase tracking-wide">
             Live Preview — {selectedName} · {new Date(targetDate + 'T00:00:00').toLocaleDateString('en-IN')}
           </span>
-          <span className="text-xs text-gray-400">{previewRows.length} items</span>
+          <span className="text-xs text-gray-400">{displayedRows.length} items</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm min-w-[800px]">
@@ -388,7 +414,7 @@ export default function StockReports() {
                 <th className="px-3 py-3 w-10 text-center">
                   <input 
                     type="checkbox" 
-                    checked={previewRows.length > 0 && selectedItemIds.size === previewRows.length}
+                    checked={displayedRows.length > 0 && selectedItemIds.size === displayedRows.length}
                     onChange={handleSelectAll}
                     className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary cursor-pointer"
                   />
@@ -407,7 +433,7 @@ export default function StockReports() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {previewRows.map((row, idx) => (
+              {displayedRows.map((row, idx) => (
                 <tr key={idx} className={`hover:bg-gray-50 transition-colors ${selectedItemIds.has(row.itemId) ? 'bg-blue-50/50' : ''}`}>
                   <td className="px-3 py-2.5 text-center">
                     <input 
@@ -433,7 +459,7 @@ export default function StockReports() {
             </tbody>
           </table>
         </div>
-        {previewRows.length === 0 && (
+        {displayedRows.length === 0 && (
           <div className="p-8 text-center text-gray-400">
             <p className="text-sm font-medium">No stock data found for the selected filters</p>
           </div>
