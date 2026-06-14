@@ -13,11 +13,12 @@ interface ModalProps {
   onMinimize?: () => void;
   onRestore?: () => void;
   minimizeLabel?: string;
+  onOutsideClick?: () => void;
 }
 
 export default function Modal({
   isOpen, onClose, title, description, children, size = 'md',
-  minimized = false, onMinimize, onRestore, minimizeLabel,
+  minimized = false, onMinimize, onRestore, minimizeLabel, onOutsideClick
 }: ModalProps) {
   if (!isOpen) return null;
 
@@ -57,7 +58,7 @@ export default function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-0">
       <div
         className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
+        onClick={onOutsideClick || onClose}
       />
 
       <div className={clsx(

@@ -213,7 +213,9 @@ export default function Users() {
                   <td className="px-6 py-5 text-center">
                     <span className={clsx(
                       "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter",
-                      user.status === 'Active' ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'
+                      user.status === 'Active' ? 'bg-emerald-50 text-emerald-600' : 
+                      user.status === 'Pending' ? 'bg-amber-50 text-amber-600' :
+                      'bg-gray-100 text-gray-400'
                     )}>
                       {user.status}
                     </span>
@@ -267,6 +269,7 @@ export default function Users() {
               <label className="label">Status Flag</label>
               <select title="Status" className="input-field h-12 bg-white font-bold" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as User['status'] }))}>
                 <option value="Active">Authorized (Active)</option>
+                <option value="Pending">Awaiting Approval (Pending)</option>
                 <option value="Inactive">De-authorized (Inactive)</option>
               </select>
             </div>

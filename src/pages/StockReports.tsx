@@ -83,26 +83,12 @@ export default function StockReports() {
     let returned = 0;
     let closing = 0;
 
-    if (isToday) {
-      if (invEntry) {
-        // The user specifically requested state-machine logic where each new import
-        // shifts the current closing balance to opening, and sets received to the new delta.
-        // This is perfectly tracked in the inventory document by batchStockEntry.
-        opening = invEntry.opening_balance || 0;
-        received = invEntry.received_balance || 0;
-        supplied = invEntry.supplied_balance || 0;
-        returned = invEntry.returned_balance || 0;
-      } else {
-        opening = snapshotQty; // Fallback
-      }
-    } else {
-      // Historical: Calculate backwards from current state
-      opening = snapshotQty - txReceived + txSupplied - txReturned;
-      if (opening < 0) opening = 0;
-      received = txReceived;
-      supplied = txSupplied;
-      returned = txReturned;
-    }
+    // Use transaction/sales aggregation for accurate metrics for BOTH today and historical
+    opening = snapshotQty - txReceived + txSupplied - txReturned;
+    if (opening < 0) opening = 0;
+    received = txReceived;
+    supplied = txSupplied;
+    returned = txReturned;
 
     closing = opening + received - supplied + returned;
 

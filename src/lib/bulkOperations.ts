@@ -291,15 +291,14 @@ export async function exportFixStocksReport(data: {
     const netChange    = postFixQty - invoiceQty;    // total variance from invoice
 
     let status: string;
-    if (invoiceQty === 0 && postFixQty > 0)  status = 'New Item (Not in Invoice)';
+    if (invoiceQty === 0 && postFixQty > 0)  status = 'Added (Not in Invoice)';
     else if (invoiceQty === 0 && postFixQty === 0) status = 'Not Received';
-    else if (postFixQty === invoiceQty)             status = 'As Invoiced';
-    else if (postFixQty > invoiceQty)               status = 'Over Received';
-    else                                            status = 'Under Received';
+    else if (postFixQty === invoiceQty)             status = 'Matches Invoice';
+    else if (postFixQty > invoiceQty)               status = 'Excess / Over';
+    else                                            status = 'Shortage / Missing';
 
     // Override status if a manual fix was applied on top
-    if (fixDelta !== 0 && status === 'As Invoiced') status = 'Manually Adjusted';
-    if (fixDelta !== 0 && status !== 'As Invoiced') status += ' + Manually Adjusted';
+    if (fixDelta !== 0) status += ' (Manually Fixed)';
 
     return {
       item_name:  item.item_name  || 'Unknown',
@@ -336,7 +335,6 @@ export async function exportFixStocksReport(data: {
   const totalPostFix    = all.reduce((s, i) => s + i.postFixQty, 0);
 
   // ── Build workbook ─────────────────────────────────────────────────────────
-  const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
 
   // ── Sheet 1: Detail ────────────────────────────────────────────────────────
@@ -360,10 +358,7 @@ export async function exportFixStocksReport(data: {
     'Brand',
     'Invoice Qty',
     'Received Qty',
-    'Post-Fix Qty',
-    'Fix Adjustment',
-    'Net Change vs Invoice',
-    'Status',
+    'Difference',
   ]);
 
   // Data rows
@@ -374,11 +369,8 @@ export async function exportFixStocksReport(data: {
       item.sku,
       item.brand,
       item.invoiceQty,
-      item.receivedQty,
       item.postFixQty,
-      item.fixDelta === 0 ? 0 : (item.fixDelta > 0 ? `+${item.fixDelta}` : item.fixDelta),
       item.netChange === 0 ? 0 : (item.netChange > 0 ? `+${item.netChange}` : item.netChange),
-      item.status,
     ]);
   });
 
@@ -390,10 +382,7 @@ export async function exportFixStocksReport(data: {
     '',
     '',
     toExport.reduce((s, i) => s + i.invoiceQty, 0),
-    toExport.reduce((s, i) => s + i.receivedQty, 0),
     toExport.reduce((s, i) => s + i.postFixQty, 0),
-    '',
-    '',
     '',
   ]);
 
@@ -405,10 +394,7 @@ export async function exportFixStocksReport(data: {
     { wch: 18 },  // Brand
     { wch: 13 },  // Invoice Qty
     { wch: 14 },  // Received Qty
-    { wch: 13 },  // Post-Fix Qty
-    { wch: 16 },  // Fix Adjustment
-    { wch: 22 },  // Net Change
-    { wch: 36 },  // Status
+    { wch: 14 },  // Difference
   ];
   XLSX.utils.book_append_sheet(wb, wsDetail, 'Import Details');
 
@@ -867,9 +853,10 @@ export async function printDailySalesReport777(data: {
   returns: any[];
 }) {
   const { locationId, date, sales, locations, items, brands, inventory, transactions, returns } = data;
-  const location = locations.find(l => l.id === locationId);
+  const location = locationId === 'all' ? { name: 'ALL SHOPS' } : locations.find(l => l.id === locationId);
   const locationName = location?.name || 'Unknown';
   const baseCurrency = useStore.getState().baseCurrency;
+  const zmwRate = useStore.getState().exchangeRates['ZMW'] || 17.80;
 
   // Use the sales data directly as it's already filtered by UI
   // Sort sales by brand name alphabetically
@@ -900,14 +887,14 @@ export async function printDailySalesReport777(data: {
     const returned = returns.filter(r => {
       const rDate = new Date(r.timestamp).toISOString().split('T')[0];
       const item = items.find(i => i.id === r.item_id);
-      return rDate === date && r.location_id === locationId && r.status === 'Restocked' && categoryMatch(item?.category || '');
+      return rDate === date && (locationId === 'all' || r.location_id === locationId) && r.status === 'Restocked' && categoryMatch(item?.category || '');
     }).reduce((sum, r) => sum + (r.quantity || 0), 0);
 
     // Transfers/Received today
     const received = transactions.filter(t => {
       const tDate = new Date(t.timestamp).toISOString().split('T')[0];
       const item = items.find(i => i.id === t.item_id);
-      return tDate === date && t.to_location === locationId && (t.type === 'transfer' || t.type === 'stock_entry') && categoryMatch(item?.category || '');
+      return tDate === date && (locationId === 'all' || t.to_location === locationId) && (t.type === 'transfer' || t.type === 'stock_entry') && categoryMatch(item?.category || '');
     }).reduce((sum, t) => sum + (t.quantity || 0), 0);
 
     // Current stock (Closing) for these items
@@ -937,35 +924,35 @@ export async function printDailySalesReport777(data: {
         <title>Daily Sales Report - ${date}</title>
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-          body { font-family: 'Inter', sans-serif; font-size: 12px; margin: 20px; color: #000; }
-          .header-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; position: relative; }
-          .header-center { position: absolute; left: 50%; transform: translateX(-50%); text-align: center; font-weight: 900; font-size: 16px; text-decoration: underline; }
-          .header-right { border: 2px solid #000; padding: 5px 20px; font-weight: 900; }
-          .location-title { font-weight: 900; font-size: 14px; margin-bottom: 5px; text-decoration: underline; }
+          body { font-family: 'Inter', sans-serif; font-size: 9px; margin: 10px; color: #000; }
+          .header-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; position: relative; }
+          .header-center { position: absolute; left: 50%; transform: translateX(-50%); text-align: center; font-weight: 900; font-size: 12px; text-decoration: underline; }
+          .header-right { border: 2px solid #000; padding: 2px 10px; font-weight: 900; }
+          .location-title { font-weight: 900; font-size: 11px; margin-bottom: 2px; text-decoration: underline; }
           
-          .summary-container { display: flex; justify-content: space-between; align-items: stretch; margin-bottom: 20px; width: 100%; border-top: 2px solid #000; border-bottom: 2px solid #000; }
+          .summary-container { display: flex; justify-content: space-between; align-items: stretch; margin-bottom: 10px; width: 100%; border-top: 2px solid #000; border-bottom: 2px solid #000; }
           
           .summary-block { flex: 0 0 35%; border-left: 1px solid #000; border-right: 1px solid #000; }
           .summary-block:first-child { border-left: none; }
           .summary-block:last-child { border-right: none; }
-          .summary-header { text-align: center; font-weight: 900; padding: 5px; border-bottom: 2px solid #000; }
+          .summary-header { text-align: center; font-weight: 900; padding: 2px; border-bottom: 2px solid #000; font-size: 9px; }
           
           .summary-table { width: 100%; border-collapse: collapse; }
-          .summary-table th, .summary-table td { border-bottom: 1px solid #000; border-right: 1px solid #000; padding: 5px 10px; text-align: left; font-size: 11px; }
+          .summary-table th, .summary-table td { border-bottom: 1px solid #000; border-right: 1px solid #000; padding: 2px 4px; text-align: left; font-size: 8px; }
           .summary-table tr:last-child th, .summary-table tr:last-child td { border-bottom: none; }
           .summary-table td { border-right: none; text-align: center; font-weight: bold; width: 40%; }
           
-          .location-middle { flex: 0 0 30%; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 10px; }
-          .location-name { font-weight: 900; font-size: 13px; margin-bottom: 15px; }
+          .location-middle { flex: 0 0 30%; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 2px; }
+          .location-name { font-weight: 900; font-size: 11px; margin-bottom: 5px; }
 
-          .main-table { width: 100%; border-collapse: collapse; margin-top: 10px; border: 2px solid #000; }
-          .main-table th, .main-table td { border: 1px solid #000; padding: 8px; text-align: center; }
-          .main-table th { font-weight: 900; font-size: 12px; }
+          .main-table { width: 100%; border-collapse: collapse; margin-top: 5px; border: 2px solid #000; }
+          .main-table th, .main-table td { border: 1px solid #000; padding: 2px 4px; text-align: center; font-size: 9px; }
+          .main-table th { font-weight: 900; font-size: 9px; }
           .main-table .text-left { text-align: left; }
-          .main-table .footer-row td { font-weight: 900; }
+          .main-table .footer-row td { font-weight: 900; font-size: 10px; }
           
           @media print {
-            @page { margin: 10mm; }
+            @page { margin: 5mm; }
             body { margin: 0; }
             .handwritten { color: #800 !important; }
           }
@@ -975,7 +962,10 @@ export async function printDailySalesReport777(data: {
         <div class="header-container">
           <div class="location-title">SHOP NAME: ${locationName.toUpperCase()}</div>
           <div class="header-center">SHOP-DAILY SALES REPORT-2026 (${baseCurrency})</div>
-          <div class="header-right">${new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }).replace(/\//g, '-')}</div>
+          <div class="header-right">
+            <div>${new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }).replace(/\//g, '-')}</div>
+            <div style="font-size: 9px; font-weight: bold; margin-top: 4px; border: none; text-align: center;">1 USD = ${zmwRate} ZMW</div>
+          </div>
         </div>
 
         <div class="summary-container">
@@ -1075,9 +1065,10 @@ export async function exportDailySalesReport777(data: {
   brands: any[];
   inventory: any[];
   transactions: any[];
+  returns: any[];
 }) {
-  const { locationId, date, sales, locations, items, brands, inventory, transactions } = data;
-  const location = locations.find(l => l.id === locationId);
+  const { locationId, date, sales, locations, items, brands, inventory, transactions, returns } = data;
+  const location = locationId === 'all' ? { name: 'ALL SHOPS' } : locations.find(l => l.id === locationId);
   const locationName = location?.name || 'Unknown';
   const baseCurrency = useStore.getState().baseCurrency;
 
@@ -1107,7 +1098,7 @@ export async function exportDailySalesReport777(data: {
     }).reduce((sum, t) => sum + (t.quantity || 0), 0);
     const closing = inventory.filter(inv => {
       const item = items.find(i => i.id === inv.item_id);
-      return inv.location_id === locationId && categoryMatch(item?.category || '');
+      return (locationId === 'all' || inv.location_id === locationId) && categoryMatch(item?.category || '');
     }).reduce((sum, inv) => sum + (inv.quantity || 0), 0);
     const opening = closing + sold - received;
     return { opening, received, sold, closing };
@@ -1389,8 +1380,8 @@ export async function exportStockReport(data: {
             <thead>
               <tr>
                 <th style="width: 35px">SL NO.</th>
-                <th style="width: 80px">CODE</th>
-                <th>ITEM DESCRIPTION</th>
+                <th style="width: 30%">CODE</th>
+                <th style="width: 20%">ITEM DESCRIPTION</th>
                 ${locationId === 'all' ? '<th>LOCATION</th>' : ''}
                 <th style="width: 60px">OPENING</th>
                 <th style="width: 60px">RECEIVED</th>
@@ -1604,7 +1595,7 @@ export async function printAllLocationsStockReport(data: {
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
           * { -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; }
           body { font-family: 'Inter', sans-serif; font-size: 10px; margin: 0; color: #000; }
-          .page { padding: 10mm; page-break-after: always; min-height: 270mm; border-bottom: 1px dashed #eee; }
+          .report-section { padding: 10px; margin-bottom: 30px; page-break-inside: avoid; }
           .header-top { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 5px; }
           .report-title { text-align: center; font-weight: 700; text-decoration: underline; margin-bottom: 2px; text-transform: uppercase; }
           .location-subtitle { text-align: center; font-weight: 700; margin-bottom: 10px; text-transform: uppercase; }
@@ -1613,7 +1604,7 @@ export async function printAllLocationsStockReport(data: {
           th { background: #eee !important; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           .text-left { text-align: left; }
           .closing { background: #d4edda !important; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          @media print { .page { margin: 0; border: none; } @page { margin: 10mm; } }
+          @media print { @page { margin: 10mm; } table { page-break-inside: auto; } tr { page-break-inside: avoid; page-break-after: auto; } }
         </style>
       </head>
       <body>
@@ -1703,7 +1694,7 @@ export async function printAllLocationsStockReport(data: {
       let totOpening = 0, totRec = 0, totSup = 0, totRet = 0, totClos = 0;
 
       html += `
-        <div class="page">
+        <div class="report-section">
           <div class="header-top">
             <div>777 INVESTMENTS LTD</div>
             <div>DATE & TIME: ${new Date().toLocaleString('en-IN')}</div>
@@ -1715,8 +1706,8 @@ export async function printAllLocationsStockReport(data: {
             <thead>
               <tr>
                 <th style="width: 35px">SL NO.</th>
-                <th style="width: 80px">CODE</th>
-                <th>ITEM DESCRIPTION</th>
+                <th style="width: 30%">CODE</th>
+                <th style="width: 20%">ITEM DESCRIPTION</th>
                 <th style="width: 60px">OPENING</th>
                 <th style="width: 60px">RECEIVED</th>
                 <th style="width: 60px">SUPPLIED</th>

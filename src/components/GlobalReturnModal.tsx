@@ -90,6 +90,7 @@ export default function GlobalReturnModal() {
       minimized={isReturnModalMinimized}
       onMinimize={() => { setReturnModalMinimized(true); setReturnModalOpen(false); }}
       onRestore={() => { setReturnModalMinimized(false); setReturnModalOpen(true); }}
+      onOutsideClick={() => { setReturnModalMinimized(true); setReturnModalOpen(false); }}
       title="Log System Reversal" 
       description="Record a returned item and choose action." 
       minimizeLabel={returnFormState.item_id ? `Returning ${returnFormState.quantity}x ${items.find(i => i.id === returnFormState.item_id)?.name || 'Item'}` : "Log Return"}

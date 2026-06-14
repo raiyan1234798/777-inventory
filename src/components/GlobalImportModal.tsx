@@ -132,6 +132,8 @@ export default function GlobalImportModal() {
     // Find header row with column names
     let headerIdx = -1;
     let colMap: Record<string, number> = {};
+    let nameHeader = '';
+    let codeHeader = '';
     for (let i = 0; i < Math.min(10, rows.length); i++) {
       const row = (rows[i] || []).map(c => String(c || '').toUpperCase().trim());
       const joined = row.join(' ');
@@ -144,8 +146,8 @@ export default function GlobalImportModal() {
         headerIdx = i;
         row.forEach((cell, idx) => {
           if (cell.includes('SL') || cell === 'NO' || cell === 'S.NO' || cell === 'SL.NO' || cell === 'SL NO') colMap['slno'] = idx;
-          if (cell.includes('CODE') || cell === 'CODE#' || cell === 'CODE #' || cell.includes('SKU') || cell === 'SKU') colMap['code'] = idx;
-          if (cell.includes('ITEM') || cell.includes('DESCRIPTION') || cell.includes('NAME') || cell.includes('PARTICULAR')) colMap['name'] = idx;
+          if (cell.includes('CODE') || cell === 'CODE#' || cell === 'CODE #' || cell.includes('SKU') || cell === 'SKU') { colMap['code'] = idx; codeHeader = cell; }
+          if (cell.includes('ITEM') || cell.includes('DESCRIPTION') || cell.includes('NAME') || cell.includes('PARTICULAR')) { colMap['name'] = idx; nameHeader = cell; }
           if (cell.includes('OPENING') || cell === 'OPS') colMap['opening'] = idx;
           if (cell.includes('RECEIVED') || cell === 'REC') colMap['received'] = idx;
           if (cell.includes('SUPPLIED') || cell === 'SALES' || cell === 'SUPP' || cell.includes('SOLD')) colMap['supplied'] = idx;
@@ -215,25 +217,43 @@ export default function GlobalImportModal() {
         qty = opening + received - supplied + returned;
       }
 
+      // Check for swapped columns where "CODE #" actually contains the item name and "ITEM DESCRIPTION" contains the brand/category
+      const isSwapped = codeHeader.includes('CODE') && !codeHeader.includes('SKU') && codeRaw.length > itemNameRaw.length && codeRaw.includes(' ');
+      
+      let finalBrandName = brandName;
+      if (isSwapped) {
+        finalBrandName = brandName ? `${brandName.trim()} ${itemNameRaw.trim()}` : itemNameRaw.trim();
+        itemName = codeRaw;
+        code = ''; // Ignore the fake code
+      } else if (brandName && itemNameRaw && itemNameRaw.length <= 15 && !itemNameRaw.includes(' ')) {
+        // Just in case it's a category but the code wasn't swapped or code was empty
+        finalBrandName = `${brandName.trim()} ${itemNameRaw.trim()}`;
+      }
+
       // Check if this brand item already exists and has an SKU assigned
-      const matchedBrand = brands.find(b => b.name.trim().toUpperCase() === (brandName || 'Imported').trim().toUpperCase());
+      const matchedBrand = brands.find(b => b.name.trim().toUpperCase() === (finalBrandName || 'Imported').trim().toUpperCase());
       const existingItem = matchedBrand 
-        ? items.find(it => it.brand_id === matchedBrand.id && it.name.toLowerCase().trim() === itemName.toLowerCase().trim())
+        ? items.find(it => {
+            if (it.brand_id !== matchedBrand.id) return false;
+            if (it.name.toLowerCase().trim() !== itemName.toLowerCase().trim()) return false;
+            if (code && it.sku.toLowerCase().trim() !== code.toLowerCase().trim()) return false;
+            return true;
+          })
         : null;
 
       let skuCode = '';
       if (existingItem) {
         skuCode = existingItem.sku;
       } else {
-        skuCode = generateBrandSKU(brandName || 'Imported', itemName, usedSkus, code);
+        skuCode = generateBrandSKU(finalBrandName || 'Imported', itemName, usedSkus, code);
       }
 
       results.push({
         name: itemName, qty: Math.max(qty, 0),
         unitCost: unitCost, retailPrice: 0, minStockLimit: 0,
         sku: skuCode,
-        category: brandName || 'Imported',
-        brandName,
+        category: finalBrandName || 'Imported',
+        brandName: finalBrandName,
         code,
         opening, received, supplied, returned, closing
       });
@@ -307,7 +327,8 @@ export default function GlobalImportModal() {
 
         const deduped = new Map<string, typeof parsedItems[0]>();
         for (const item of parsedItems) {
-          const key = item.name.toLowerCase();
+          const codeKey = item.sku ? item.sku.toLowerCase().trim() : '';
+          const key = `${item.name.toLowerCase().trim()}_${codeKey}`;
           if (deduped.has(key)) {
             const existing = deduped.get(key)!;
             existing.qty += item.qty;
@@ -468,7 +489,11 @@ export default function GlobalImportModal() {
       setImportProcessingStatus(`Building batches for ${importPreview.length} items...`);
 
       const localItemsMap = new Map<string, any>();
-      items.forEach(it => localItemsMap.set(`${it.brand_id}_${it.name.toLowerCase().trim()}`, it));
+      const localItemsByNameMap = new Map<string, any>();
+      items.forEach(it => {
+        localItemsMap.set(`${it.brand_id}_${it.name.toLowerCase().trim()}_${(it.sku || '').toLowerCase().trim()}`, it);
+        localItemsByNameMap.set(`${it.brand_id}_${it.name.toLowerCase().trim()}`, it);
+      });
       const localBrandsMap = new Map<string, any>();
       brands.forEach(b => localBrandsMap.set(b.name.trim().toUpperCase(), b));
 
@@ -519,7 +544,9 @@ export default function GlobalImportModal() {
           localBrandsMap.set(brandNameText, newBrand);
         }
 
-        let item = localItemsMap.get(`${brandId}_${pItem.name.toLowerCase().trim()}`);
+        // Primary matching: Match purely by Brand + Name! Ignore SKU completely to avoid duplicates if SKU changes.
+        let item = localItemsByNameMap.get(`${brandId}_${pItem.name.toLowerCase().trim()}`);
+        
         let itemId = item?.id;
 
         if (!itemId) {
@@ -531,7 +558,9 @@ export default function GlobalImportModal() {
             category: pItem.category || 'Imported',
             min_stock_limit: pItem.minStockLimit || 0,
             retail_price: incomingRetailUSD,
-            avg_cost_USD: incomingCostINR
+            avg_cost_USD: incomingCostINR,
+            avg_cost_local: pItem.unitCost || 0,
+            local_currency: importCurrency
           };
           importedSkusSet.add(newItem.sku);
           if (masterOpCount >= MASTER_CHUNK) {
@@ -541,14 +570,25 @@ export default function GlobalImportModal() {
           }
           masterBatch.set(iRef, newItem);
           masterOpCount++;
-          localItemsMap.set(`${brandId}_${pItem.name.toLowerCase().trim()}`, newItem);
+          localItemsMap.set(`${brandId}_${pItem.name.toLowerCase().trim()}_${(newItem.sku || '').toLowerCase().trim()}`, newItem);
           newItemsCreated++;
         } else {
           const updateData: any = {};
           if (pItem.retailPrice !== undefined && pItem.retailPrice > 0) updateData.retail_price = incomingRetailUSD;
-          if (incomingCostINR !== undefined && incomingCostINR > 0) updateData.avg_cost_USD = incomingCostINR;
+          if (incomingCostINR !== undefined && incomingCostINR > 0) {
+            updateData.avg_cost_USD = incomingCostINR;
+            updateData.avg_cost_local = pItem.unitCost || 0;
+            updateData.local_currency = importCurrency;
+          }
           if (pItem.minStockLimit !== undefined) updateData.min_stock_limit = pItem.minStockLimit;
           if (brandId) updateData.brand_id = brandId;
+          
+          // Also update the SKU to whatever the new Excel file says, so it corrects old generated SKUs
+          const newSkuCode = generateBrandSKU(brandNameText, pItem.name, importedSkusSet, pItem.sku || pItem.code);
+          if (newSkuCode && newSkuCode !== item.sku) {
+             updateData.sku = newSkuCode;
+             importedSkusSet.add(newSkuCode);
+          }
           if (Object.keys(updateData).length > 0) {
             if (masterOpCount >= MASTER_CHUNK) {
               allMasterBatches.push(masterBatch);
@@ -589,6 +629,13 @@ export default function GlobalImportModal() {
         }
         
         const newQty = opening + received - supplied + returned;
+        const incomingQtyForAvg = received > 0 ? received : (opening === 0 ? newQty : 0);
+        let newAvgUSD = existing?.avg_cost_USD ?? 0;
+        let newAvgLocal = existing?.avg_cost_local ?? pItem.unitCost ?? 0;
+        if (incomingQtyForAvg > 0 || (incomingCostINR > 0 && newQty > 0)) {
+           if (incomingCostINR > 0) newAvgUSD = incomingCostINR;
+           if (pItem.unitCost && pItem.unitCost > 0) newAvgLocal = pItem.unitCost;
+        }
 
         if (invOpCount >= INV_CHUNK) {
           inventoryBatches.push(invBatch);
@@ -605,7 +652,9 @@ export default function GlobalImportModal() {
           supplied_balance: supplied,
           returned_balance: returned,
           last_import_timestamp: new Date().toISOString(),
-          avg_cost_USD: incomingCostINR > 0 ? incomingCostINR : (existing?.avg_cost_USD ?? 0)
+          avg_cost_USD: newAvgUSD,
+          avg_cost_local: newAvgLocal,
+          local_currency: importCurrency
         });
         invOpCount++;
 
@@ -628,7 +677,9 @@ export default function GlobalImportModal() {
             unit_cost: pItem.unitCost || 0,
             currency: importCurrency,
             converted_value_USD: toUSD((pItem.unitCost || 0) * txQty, importCurrency),
-            performed_by: useAuthStore.getState().user?.name ?? 'Admin',
+            unit_cost_local: pItem.unitCost || 0,
+            local_currency: importCurrency,
+            performed_by: useAuthStore.getState().appUser?.name ?? useAuthStore.getState().user?.displayName ?? 'Admin',
             container_id: containerId,
             notes: 'Imported via Smart Stock Import',
             timestamp: new Date().toISOString()
@@ -659,7 +710,7 @@ export default function GlobalImportModal() {
         // Use localBrandsMap (built during this import) — not stale React brands state
         // This ensures newly created brands in this import are resolved correctly
         const resolvedBrand = localBrandsMap.get(brandName);
-        const resolvedItem = localItemsMap.get(`${resolvedBrand?.id ?? ''}_${pItem.name.toLowerCase().trim()}`);
+        const resolvedItem = localItemsMap.get(`${resolvedBrand?.id ?? ''}_${pItem.name.toLowerCase().trim()}_${(pItem.sku || '').toLowerCase().trim()}`);
         return {
           item_id: (resolvedItem as any)?.id ?? pItem.name,
           item_name: pItem.name,
@@ -705,6 +756,7 @@ export default function GlobalImportModal() {
       minimized={isImportModalMinimized}
       onMinimize={() => { setImportModalMinimized(true); setImportModalOpen(false); }}
       onRestore={() => { setImportModalMinimized(false); setImportModalOpen(true); }}
+      onOutsideClick={() => { setImportModalMinimized(true); setImportModalOpen(false); }}
       title="Smart Stock Import" 
       description="Upload Excel, PDF, or Images. Drag & Drop supported." 
       minimizeLabel={importExcelFileName ? `Importing ${importExcelFileName}` : "Bulk Import"}

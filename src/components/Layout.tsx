@@ -25,6 +25,7 @@ import GlobalTransferModal from './GlobalTransferModal';
 import GlobalRecordSaleModal from './GlobalRecordSaleModal';
 import GlobalReturnModal from './GlobalReturnModal';
 import GlobalImportModal from './GlobalImportModal';
+import { auth } from '../lib/firebase';
 
 const navItems = [
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, group: 'CORE' },
@@ -139,7 +140,7 @@ export default function Layout() {
         </nav>
 
         {/* User Footer */}
-        <div className="p-4 border-t border-gray-100">
+        <div className="p-4 border-t border-gray-100 space-y-3">
           <div className="flex items-center gap-3 px-2 py-2 rounded-lg bg-gray-50">
             <div className="w-8 h-8 rounded-full bg-primary/10 flex flex-shrink-0 items-center justify-center text-primary font-bold text-sm">
               {appUser?.name ? appUser.name.charAt(0).toUpperCase() : 'U'}
@@ -149,6 +150,12 @@ export default function Layout() {
               <span className="text-xs text-gray-400 capitalize truncate">{appUser?.role?.replace(/_/g, ' ') || 'Guest'}</span>
             </div>
           </div>
+          <button
+            onClick={() => auth.signOut()}
+            className="w-full py-2 px-3 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors flex items-center justify-center gap-2"
+          >
+            Sign Out
+          </button>
         </div>
       </aside>
 

@@ -76,13 +76,14 @@ export default function Transfers() {
     setSelectedSession(session);
     setFixModalSearch('');
     
-    const initialFixes = session.items.map((sItem: any) => {
+    const initialFixes = session.items.map((sItem: any, idx: number) => {
       const item = items.find(i => i.id === sItem.item_id);
       
       const sourceInv = inventory.find(inv => inv.location_id === session.from_location && inv.item_id === sItem.item_id);
       const destInv = inventory.find(inv => inv.location_id === session.to_location && inv.item_id === sItem.item_id);
       
       return {
+        unique_id: `${sItem.item_id}_${idx}`,
         item_id: sItem.item_id,
         item_name: sItem.item_name,
         sku: sItem.sku || item?.sku || 'No SKU',
@@ -100,9 +101,9 @@ export default function Transfers() {
     setIsFixModalOpen(true);
   };
 
-  const handleFixQtyChange = (itemId: string, val: number) => {
+  const handleFixQtyChange = (uniqueId: string, val: number) => {
     setFixItems(prev => prev.map(item => {
-      if (item.item_id !== itemId) return item;
+      if (item.unique_id !== uniqueId) return item;
       const newQty = Math.max(0, val);
       return {
         ...item,
@@ -788,7 +789,7 @@ export default function Transfers() {
                                 hasChanged ? "border-primary bg-primary/5 text-primary" : "border-gray-200 text-gray-800 bg-white"
                               )}
                               value={row.newQty}
-                              onChange={(e) => handleFixQtyChange(row.item_id, Number(e.target.value))}
+                              onChange={(e) => handleFixQtyChange(row.unique_id, Number(e.target.value))}
                               title="Received quantity input"
                             />
                           </td>

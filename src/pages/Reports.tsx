@@ -9,6 +9,8 @@ export default function Reports() {
   const [selectedBrand, setSelectedBrand] = useState<string>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSaleIds, setSelectedSaleIds] = useState<Set<string>>(new Set());
 
   const shops = locations.filter(l => l.type === 'shop');
 
@@ -35,8 +37,38 @@ export default function Reports() {
     });
   };
 
+  const filterBySearch = (data: any[]) => {
+    if (!searchQuery.trim()) return data;
+    const query = searchQuery.toLowerCase();
+    return data.filter(item => 
+      item.item_name?.toLowerCase().includes(query)
+    );
+  };
+
   // Get filtered data
-  const filteredSales = filterByBrand(filterByLocation(filterByDateRange(sales, 'timestamp'), 'location_id'));
+  const filteredSales = filterBySearch(filterByBrand(filterByLocation(filterByDateRange(sales, 'timestamp'), 'location_id')));
+
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      setSelectedSaleIds(new Set(filteredSales.map(s => s.id)));
+    } else {
+      setSelectedSaleIds(new Set());
+    }
+  };
+
+  const toggleSaleSelection = (id: string) => {
+    const next = new Set(selectedSaleIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedSaleIds(next);
+  };
+
+  const salesToExport = selectedSaleIds.size > 0 
+    ? filteredSales.filter(s => selectedSaleIds.has(s.id))
+    : filteredSales;
 
   // Calculate totals
   const salesTotal = filteredSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
@@ -92,6 +124,18 @@ export default function Reports() {
             </select>
           </div>
 
+          <div className="flex-1">
+            <label className="block text-xs font-bold text-gray-600 mb-2">Search Items</label>
+            <input
+              type="text"
+              placeholder="Search by item name..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search Items"
+              className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium focus:outline-none focus:border-primary bg-white"
+            />
+          </div>
+
           <div>
             <label className="block text-xs font-bold text-gray-600 mb-2">From Date</label>
             <input
@@ -120,6 +164,8 @@ export default function Reports() {
               setToDate('');
               setSelectedLocation('all');
               setSelectedBrand('all');
+              setSearchQuery('');
+              setSelectedSaleIds(new Set());
             }}
             className="px-4 py-2.5 text-sm font-bold text-gray-900 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
           >
@@ -134,33 +180,31 @@ export default function Reports() {
         <div className="flex flex-wrap gap-3 mb-6">
           <button
             onClick={async () => {
-              if (selectedLocation === 'all') return alert('Please select a specific location first');
               const date = fromDate || new Date().toISOString().split('T')[0];
               await printDailySalesReport777({
                 locationId: selectedLocation,
                 date,
-                sales: filteredSales, locations, items, brands, inventory, transactions, returns
+                sales: salesToExport, locations, items, brands, inventory, transactions, returns
               });
             }}
             className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-lg font-bold text-sm hover:bg-gray-800 transition shadow-md"
           >
             <FileText className="w-4 h-4" />
-            Print Daily Report (PDF)
+            {selectedSaleIds.size > 0 ? `Print PDF (${selectedSaleIds.size} Selected)` : 'Print Daily Report (PDF)'}
           </button>
           <button
             onClick={async () => {
-              if (selectedLocation === 'all') return alert('Please select a specific location first');
               const date = fromDate || new Date().toISOString().split('T')[0];
               await exportDailySalesReport777({
                 locationId: selectedLocation,
                 date,
-                sales: filteredSales, locations, items, brands, inventory, transactions
+                sales: salesToExport, locations, items, brands, inventory, transactions, returns
               });
             }}
             className="flex items-center gap-2 px-4 py-2 border-2 border-black text-black rounded-lg font-bold text-sm hover:bg-gray-50 transition"
           >
             <Download className="w-4 h-4" />
-            Export Daily Report (Excel)
+            {selectedSaleIds.size > 0 ? `Export Excel (${selectedSaleIds.size} Selected)` : 'Export Daily Report (Excel)'}
           </button>
         </div>
 
@@ -190,6 +234,14 @@ export default function Reports() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
+                  <th className="px-4 py-3 w-10 text-center">
+                    <input 
+                      type="checkbox" 
+                      checked={filteredSales.length > 0 && selectedSaleIds.size === filteredSales.length}
+                      onChange={handleSelectAll}
+                      className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary cursor-pointer"
+                    />
+                  </th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Item</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">QTY</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Unit Price</th>
@@ -203,7 +255,15 @@ export default function Reports() {
                 {filteredSales.map((sale, idx) => {
                   const location = locations.find(l => l.id === sale.location_id);
                   return (
-                    <tr key={idx} className="hover:bg-gray-50">
+                    <tr key={idx} className={`hover:bg-gray-50 transition-colors ${selectedSaleIds.has(sale.id) ? 'bg-blue-50/50' : ''}`}>
+                      <td className="px-4 py-3 text-center">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedSaleIds.has(sale.id)}
+                          onChange={() => toggleSaleSelection(sale.id)}
+                          className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary cursor-pointer"
+                        />
+                      </td>
                       <td className="px-4 py-3 font-medium text-gray-900">{sale.item_name}</td>
                       <td className="px-4 py-3 text-gray-600">{sale.quantity}</td>
                       <td className="px-4 py-3 text-gray-600">{formatCurrency((sale.converted_price_USD || 0) / (sale.quantity || 1))}</td>

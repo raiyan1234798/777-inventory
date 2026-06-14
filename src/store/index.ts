@@ -35,6 +35,8 @@ export interface Item {
   min_stock_limit: number;
   retail_price?: number; 
   avg_cost_USD?: number; 
+  avg_cost_local?: number;
+  local_currency?: string;
 }
 
 export interface InventoryEntry {
@@ -48,6 +50,8 @@ export interface InventoryEntry {
   returned_balance: number;
   last_rollover_date?: string; // YYYY-MM-DD
   avg_cost_USD: number;
+  avg_cost_local?: number;
+  local_currency?: string;
 }
 
 export interface Container {
@@ -80,6 +84,8 @@ export interface Transaction {
   container_id?: string;
   import_session_id?: string;
   transfer_session_id?: string;
+  unit_cost_local?: number;
+  local_currency?: string;
 }
 
 export interface Sale {
@@ -93,6 +99,9 @@ export interface Sale {
   converted_price_USD: number;
   avg_cost_USD: number;
   profit_USD: number;
+  avg_cost_local?: number;
+  profit_local?: number;
+  local_currency?: string;
   sold_by: string;
   timestamp: string;
 }
@@ -194,7 +203,7 @@ export interface User {
   email: string;
   role: 'super_admin' | 'admin' | 'warehouse_staff' | 'shop_staff';
   location_id: string;
-  status: 'Active' | 'Inactive';
+  status: 'Active' | 'Inactive' | 'Pending';
 }
 
 // ─── Exchange Rates (Dynamic, loaded from Firebase) ────────────────────────
@@ -367,7 +376,7 @@ interface AppState {
   setImportSessions: (d: ImportSession[]) => void;
   saveImportSession: (session: Omit<ImportSession, 'id'>) => Promise<string>;
   deleteImportSession: (id: string) => Promise<void>;
-  fixImportStock: (sessionId: string, fixes: { item_id: string; newQty: number; location_id: string }[]) => Promise<void>;
+  fixImportStock: (sessionId: string, fixes: { item_id: string; newQty: number; location_id: string; sessionItemIndex?: number }[]) => Promise<void>;
 
   setTransferSessions: (d: TransferSession[]) => void;
   executeTransferSession: (data: {
@@ -496,29 +505,19 @@ interface AppState {
   }[], performed_by: string, options?: { skipNotifications?: boolean; isPending?: boolean }) => Promise<void>;
 
   // Transfer between locations
-  transfer: (params: {
-    from_location: string;
-    to_location: string;
-    item_id: string;
-    item_name: string;
-    quantity: number;
-    unit_cost_USD: number;
-    performed_by: string;
-  }) => Promise<void>;
+  recordTransfer: (params: {
+    from_location: string; to_location: string; item_id: string; item_name: string;
+    quantity: number; unit_cost_USD: number; performed_by: string; container_id?: string | null;
+  }, options?: { skipNotifications?: boolean }) => Promise<void>;
 
   // Sale from a shop
   recordSale: (params: {
-    item_id: string;
-    item_name: string;
-    location_id: string;
-    quantity: number;
-    selling_price: number;
-    currency: string;
-    sold_by: string;
-  }) => Promise<void>;
+    item_id: string; item_name: string; location_id: string;
+    quantity: number; selling_price: number; currency: string; sold_by: string;
+  }, options?: { skipNotifications?: boolean }) => Promise<void>;
 
   // Return
-  processReturn: (ret: Omit<ReturnRecord, 'id'>) => Promise<void>;
+  processReturn: (ret: Omit<ReturnRecord, 'id'>, options?: { skipNotifications?: boolean }) => Promise<void>;
 
   // Users
   addUser: (user: Omit<User, 'id'>) => Promise<void>;
@@ -542,6 +541,7 @@ interface AppState {
   markNotificationRead: (id: string) => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
   deleteNotifications: (ids: string[]) => Promise<void>;
+  createNotification: (notif: Partial<AppNotification>) => Promise<void>;
   initFirestoreSync: () => void;
 
   // Maintenance
@@ -598,17 +598,27 @@ export const useStore = create<AppState>((set, get) => ({
 
     const updatedSessionItems = [...session.items];
 
+    const runningInventoryMap = new Map<string, number>();
+
     for (const fix of fixes) {
       const safeLocId = fix.location_id.replace(/\//g, '-');
       const safeItemId = fix.item_id.replace(/\//g, '-');
       const invId = `${safeLocId}_${safeItemId}`;
+      
       const existing = inventory.find(e => e.id === invId);
-      const currentQty = existing?.quantity ?? 0;
+      const baseQty = existing?.quantity ?? 0;
+      const currentQty = runningInventoryMap.has(invId) ? runningInventoryMap.get(invId)! : baseQty;
 
-      const sItem = updatedSessionItems.find(si => si.item_id === fix.item_id);
+      const sItemIdx = fix.sessionItemIndex;
+      const sItem = sItemIdx !== undefined && sItemIdx >= 0 && sItemIdx < updatedSessionItems.length 
+        ? updatedSessionItems[sItemIdx] 
+        : updatedSessionItems.find(si => si.item_id === fix.item_id);
+
       const oldReceivedQty = sItem ? sItem.receivedQty : 0;
       const diff = fix.newQty - oldReceivedQty;
       const newInventoryQty = existing ? Math.max(0, currentQty + diff) : fix.newQty;
+      
+      runningInventoryMap.set(invId, newInventoryQty);
 
       // 1. Check if the item itself was deleted from the main items collection, and restore it.
       const existingItem = items.find(it => it.id === fix.item_id);
@@ -645,13 +655,16 @@ export const useStore = create<AppState>((set, get) => ({
         fixed_from_session: sessionId,
       });
 
-      const sItemIdx = updatedSessionItems.findIndex(si => si.item_id === fix.item_id);
-      if (sItemIdx !== -1) {
+      if (sItemIdx !== undefined && sItemIdx >= 0 && sItemIdx < updatedSessionItems.length) {
         updatedSessionItems[sItemIdx] = {
           ...updatedSessionItems[sItemIdx],
           receivedQty: fix.newQty
         };
       } else {
+        const fallbackIdx = updatedSessionItems.findIndex(si => si.item_id === fix.item_id);
+        if (fallbackIdx !== -1) {
+          updatedSessionItems[fallbackIdx] = { ...updatedSessionItems[fallbackIdx], receivedQty: fix.newQty };
+        } else {
         const addedItem = items.find(it => it.id === fix.item_id);
         if (addedItem) {
           const brandObj = brands.find(b => b.id === addedItem.brand_id);
@@ -665,6 +678,7 @@ export const useStore = create<AppState>((set, get) => ({
             unitCost: addedItem.avg_cost_USD || 0,
             retailPrice: addedItem.retail_price || 0
           });
+        }
         }
       }
 
@@ -1158,6 +1172,16 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  createNotification: async (notif) => {
+    const notifRef = doc(collection(db, 'notifications'));
+    await setDoc(notifRef, {
+      id: notifRef.id,
+      status: 'unread',
+      timestamp: new Date().toISOString(),
+      ...notif
+    });
+  },
+
   deleteStockEntry: async (id: string) => {
     return get().deleteStockEntries([id]);
   },
@@ -1473,7 +1497,7 @@ export const useStore = create<AppState>((set, get) => ({
     for (let i = 0; i < items_to_process.length; i += CHUNK_SIZE) {
       const chunk = items_to_process.slice(i, i + CHUNK_SIZE);
       const batch = writeBatch(db);
-      const pendingInventory = new Map<string, { quantity: number; avg_cost_USD: number }>();
+      const pendingInventory = new Map<string, { quantity: number; avg_cost_USD: number; avg_cost_local?: number; local_currency?: string }>();
 
       for (const params of chunk) {
         const { container_id, location_id, item_id, item_name, quantity, unit_cost, currency, is_absolute_override } = params;
@@ -1487,8 +1511,8 @@ export const useStore = create<AppState>((set, get) => ({
         if (!currentInv) {
           const existing = inventorySnapshot.get(invId);
           currentInv = existing
-            ? { quantity: existing.quantity, avg_cost_USD: existing.avg_cost_USD }
-            : { quantity: 0, avg_cost_USD: 0 };
+            ? { quantity: existing.quantity, avg_cost_USD: existing.avg_cost_USD, avg_cost_local: existing.avg_cost_local, local_currency: existing.local_currency }
+            : { quantity: 0, avg_cost_USD: 0, avg_cost_local: 0, local_currency: currency };
         }
 
         const deltaQty = is_absolute_override
@@ -1498,21 +1522,23 @@ export const useStore = create<AppState>((set, get) => ({
         const newQty = is_absolute_override ? (isPending ? currentInv.quantity : quantity) : currentInv.quantity + deltaToApply;
 
         let newAvg = currentInv.avg_cost_USD;
+        let newAvgLocal = currentInv.avg_cost_local ?? unit_cost;
         if (!is_absolute_override) {
-          newAvg = currentInv.quantity > 0 || deltaToApply > 0
-            ? (currentInv.avg_cost_USD * currentInv.quantity + avgCostINR * deltaToApply) / newQty
-            : avgCostINR;
+          if (avgCostINR > 0) newAvg = avgCostINR;
+          if (unit_cost > 0) newAvgLocal = unit_cost;
         } else if (avgCostINR > 0) {
           newAvg = avgCostINR;
+          newAvgLocal = unit_cost;
         }
 
         const safeQty = Math.round(newQty);
-        pendingInventory.set(invId, { quantity: safeQty, avg_cost_USD: newAvg });
+        pendingInventory.set(invId, { quantity: safeQty, avg_cost_USD: newAvg, avg_cost_local: newAvgLocal, local_currency: currency });
 
         const currentDay = new Date().toISOString().split('T')[0];
 
         batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({
           id: invId, location_id, item_id, quantity: safeQty, avg_cost_USD: newAvg,
+          avg_cost_local: newAvgLocal, local_currency: currency,
           opening_balance: currentInv.quantity, // Closing becomes Opening
           received_balance: deltaToApply,
           supplied_balance: 0,
@@ -1527,6 +1553,7 @@ export const useStore = create<AppState>((set, get) => ({
             from_location: 'supplier', to_location: location_id,
             item_id, item_name, quantity: deltaQty, unit_cost, currency,
             converted_value_USD: toUSD(unit_cost * Math.abs(deltaQty), currency),
+            unit_cost_local: unit_cost, local_currency: currency,
             performed_by, container_id: container_id || null,
             notes: is_absolute_override ? 'Stock level override (Import)' : null,
             timestamp: new Date().toISOString(),
@@ -1574,13 +1601,12 @@ export const useStore = create<AppState>((set, get) => ({
 
 
   // ── Transfer ───────────────────────────────────────────────────────────────
-  transfer: async ({ from_location, to_location, item_id, item_name, quantity, unit_cost_USD, performed_by }) => {
-    // FIX: Use transaction locks on both source and destination to prevent race conditions
-    const fromLock = `inventory_${from_location}_${item_id}`;
-    const toLock = `inventory_${to_location}_${item_id}`;
+  recordTransfer: async ({ from_location, to_location, item_id, item_name, quantity, unit_cost_USD, performed_by, container_id }, options = {}) => {
+    const lockResource1 = `inventory_${from_location}_${item_id}`;
+    const lockResource2 = `inventory_${to_location}_${item_id}`;
 
-    return transactionLockManager.executeWithLock(fromLock, async () => {
-      return transactionLockManager.executeWithLock(toLock, async () => {
+    return transactionLockManager.executeWithLock(lockResource1, async () => {
+      return transactionLockManager.executeWithLock(lockResource2, async () => {
         const batch = writeBatch(db);
 
         const fromEntry = get().getInventoryAt(from_location, item_id);
@@ -1595,6 +1621,11 @@ export const useStore = create<AppState>((set, get) => ({
         const toAvg = toEntry
           ? (toEntry.avg_cost_USD * toEntry.quantity + unit_cost_USD * quantity) / toQty
           : unit_cost_USD;
+        const fromLocalCost = fromEntry.avg_cost_local ?? unit_cost_USD;
+        const fromLocalCurrency = fromEntry.local_currency ?? 'USD';
+        const toAvgLocal = toEntry
+          ? ((toEntry.avg_cost_local || 0) * toEntry.quantity + fromLocalCost * quantity) / toQty
+          : fromLocalCost;
 
         const currentDay = new Date().toISOString().split('T')[0];
 
@@ -1613,11 +1644,14 @@ export const useStore = create<AppState>((set, get) => ({
               ...toEntry,
               quantity: toQty,
               received_balance: (toEntry.received_balance || 0) + quantity,
-              avg_cost_USD: toAvg
+              avg_cost_USD: toAvg,
+              avg_cost_local: toAvgLocal,
+              local_currency: fromLocalCurrency
             }
           : {
               id: toId, location_id: to_location, item_id,
               quantity: toQty, avg_cost_USD: toAvg,
+              avg_cost_local: toAvgLocal, local_currency: fromLocalCurrency,
               opening_balance: 0, received_balance: quantity,
               supplied_balance: 0, returned_balance: 0,
               last_rollover_date: currentDay
@@ -1632,60 +1666,44 @@ export const useStore = create<AppState>((set, get) => ({
           converted_value_USD: unit_cost_USD * quantity,
           performed_by,
           timestamp: new Date().toISOString(),
+          container_id: container_id || null
         });
 
-        // Low stock check for source after transfer
-        const item = get().items.find(i => i.id === item_id);
-
-        // Helper (local)
-        const createNotif2 = (
-          type: AppNotification['type'],
-          location_id: string,
-          message: string,
-          target_roles: AppNotification['target_roles'],
-          extra?: Partial<AppNotification>
-        ) => {
-          const notifRef = doc(collection(db, 'notifications'));
-          batch.set(notifRef, {
-            id: notifRef.id, type, location_id, message,
-            target_roles, status: 'unread',
-            timestamp: new Date().toISOString(),
-            ...extra,
-          });
-        };
-
-        // Transfer notification — notify location-specific staff based on location type
+        // Helper
+        const getLocationName = (id: string) => get().locations.find(l => l.id === id)?.name ?? id;
         const fromLoc = get().locations.find(l => l.id === from_location);
         const toLoc = get().locations.find(l => l.id === to_location);
-        const fromName = fromLoc?.name ?? from_location;
-        const toName = toLoc?.name ?? to_location;
-
-        // Get target roles for source and destination based on their location types
         const fromTargetRoles = getTargetRolesForLocationStockEntry(fromLoc?.type ?? 'warehouse');
         const toTargetRoles = getTargetRolesForLocationStockEntry(toLoc?.type ?? 'warehouse');
 
-        // Notify source location staff
-        createNotif2(
-          'transfer', from_location,
-          `🔄 Transfer Out: ${item_name} — ${quantity} units transferred from ${fromName} → ${toName} by ${performed_by}.`,
-          fromTargetRoles,
-          { item_id, target_location_id: to_location }
-        );
-        // Notify destination location staff separately
-        createNotif2(
-          'transfer', to_location,
-          `📥 Transfer In: ${item_name} — ${quantity} units received at ${toName} from ${fromName} by ${performed_by}.`,
-          toTargetRoles,
-          { item_id, target_location_id: from_location }
-        );
+        // Transfer notifications
+        if (!options.skipNotifications) {
+          const notif1 = doc(collection(db, 'notifications'));
+          batch.set(notif1, {
+            id: notif1.id, type: 'transfer', location_id: from_location,
+            message: `🔄 Transfer Out: ${quantity}x ${item_name} transferred from ${getLocationName(from_location)} → ${getLocationName(to_location)}.`,
+            target_roles: fromTargetRoles, status: 'unread',
+            timestamp: new Date().toISOString(), item_id, target_location_id: to_location
+          });
 
+          const notif2 = doc(collection(db, 'notifications'));
+          batch.set(notif2, {
+            id: notif2.id, type: 'transfer', location_id: to_location,
+            message: `🔄 Transfer: ${quantity}x ${item_name} arrived at ${getLocationName(to_location)} from ${getLocationName(from_location)}.`,
+            target_roles: toTargetRoles, status: 'unread',
+            timestamp: new Date().toISOString(), item_id, target_location_id: from_location
+          });
+        }
+
+        const item = get().items.find(i => i.id === item_id);
         if (item && newFromQty < item.min_stock_limit) {
-          createNotif2(
-            'low_stock', from_location,
-            `⚠️ Low Stock Alert: ${item_name} at ${fromName} is below minimum after transfer (${newFromQty}/${item.min_stock_limit} units). Immediate action required.`,
-            fromTargetRoles,
-            { item_id }
-          );
+          const lowNotif = doc(collection(db, 'notifications'));
+          batch.set(lowNotif, {
+            id: lowNotif.id, type: 'low_stock', location_id: from_location,
+            message: `⚠️ Low Stock Alert: ${item_name} at ${getLocationName(from_location)} is below minimum (${newFromQty}/${item.min_stock_limit} units).`,
+            target_roles: fromTargetRoles, status: 'unread',
+            timestamp: new Date().toISOString(), item_id
+          });
         }
 
         await batch.commit();
@@ -1694,7 +1712,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // ── Sale ───────────────────────────────────────────────────────────────────
-  recordSale: async ({ item_id, item_name, location_id, quantity, selling_price, currency, sold_by }) => {
+  recordSale: async ({ item_id, item_name, location_id, quantity, selling_price, currency, sold_by }, options = {}) => {
     // FIX: Use transaction lock to prevent overselling
     const lockResource = `inventory_${location_id}_${item_id}`;
     
@@ -1717,14 +1735,17 @@ export const useStore = create<AppState>((set, get) => ({
 
       const convertedPriceINR = toUSD(selling_price * quantity, currency);
       const profitINR = convertedPriceINR - invEntry.avg_cost_USD * quantity;
+      const profitLocal = (selling_price * quantity) - ((invEntry.avg_cost_local ?? invEntry.avg_cost_USD) * quantity);
 
       const saleRef = doc(collection(db, 'sales'));
-      batch.set(saleRef, {
+      batch.set(saleRef, sanitizeForFirestore({
         id: saleRef.id, item_id, item_name, location_id, quantity,
         selling_price, currency, converted_price_USD: convertedPriceINR,
         avg_cost_USD: invEntry.avg_cost_USD, profit_USD: profitINR,
+        avg_cost_local: invEntry.avg_cost_local ?? invEntry.avg_cost_USD,
+        profit_local: profitLocal, local_currency: invEntry.local_currency ?? 'USD',
         sold_by, timestamp: new Date().toISOString(),
-      });
+      }));
 
       const txRef = doc(collection(db, 'transactions'));
       batch.set(txRef, {
@@ -1757,13 +1778,15 @@ export const useStore = create<AppState>((set, get) => ({
         });
       };
 
-      // Sale notification — location staff + admin + super_admin
-      createNotif3(
-        'sale', location_id,
-        `🛍️ Sale Recorded: ${quantity}x ${item_name} sold at ${saleLocName} by ${sold_by}.`,
-        saleTargetRoles,
-        { item_id }
-      );
+      // Skip individual sale notifications if requested
+      if (!options.skipNotifications) {
+        createNotif3(
+          'sale', location_id,
+          `🛍️ Sale Recorded: ${quantity}x ${item_name} sold at ${saleLocName} by ${sold_by}.`,
+          saleTargetRoles,
+          { item_id }
+        );
+      }
 
       if (item && newQty < item.min_stock_limit) {
         createNotif3(
@@ -1778,7 +1801,7 @@ export const useStore = create<AppState>((set, get) => ({
     }, sold_by);
   },
 
-  processReturn: async (ret) => {
+  processReturn: async (ret, options = {}) => {
     const lockResource = `inventory_${ret.location_id}_${ret.item_id}`;
     
     return transactionLockManager.executeWithLock(lockResource, async () => {

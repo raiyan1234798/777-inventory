@@ -8,7 +8,7 @@ import clsx from 'clsx';
 export default function GlobalRecordSaleModal() {
   const { appUser } = useAuthStore();
   const { 
-    locations, items, inventory, recordSale, brands,
+    locations, items, inventory, recordSale, brands, createNotification,
     isRecordSaleModalOpen, isRecordSaleModalMinimized, recordSaleLocation, recordSaleItems,
     setRecordSaleModalOpen, setRecordSaleModalMinimized, setRecordSaleLocation, setRecordSaleItems
   } = useStore();
@@ -41,8 +41,25 @@ export default function GlobalRecordSaleModal() {
           selling_price: si.selling_price,
           currency: si.currency,
           sold_by: appUser?.name ?? 'Staff',
-        });
+        }, { skipNotifications: true });
       }));
+
+      // Generate a single consolidated notification
+      const shopName = locations.find(l => l.id === recordSaleLocation)?.name ?? 'Shop';
+      const itemNames = recordSaleItems.map(si => items.find(i => i.id === si.item_id)?.name).filter(Boolean);
+      const uniqueItemNames = Array.from(new Set(itemNames));
+      const totalQty = recordSaleItems.reduce((acc, si) => acc + si.quantity, 0);
+      const summaryText = uniqueItemNames.length <= 2 
+        ? uniqueItemNames.join(' and ') 
+        : `${uniqueItemNames.slice(0, 2).join(', ')} and ${uniqueItemNames.length - 2} other(s)`;
+
+      await createNotification({
+        type: 'sale',
+        location_id: recordSaleLocation,
+        message: `🛍️ Bulk Sale Recorded: ${totalQty} units across ${recordSaleItems.length} items (${summaryText}) sold at ${shopName} by ${appUser?.name ?? 'Staff'}.`,
+        target_roles: ['super_admin', 'admin', 'shop_staff'],
+      });
+
       setRecordSaleModalOpen(false);
       setRecordSaleModalMinimized(false);
       setRecordSaleLocation('');
@@ -76,6 +93,7 @@ export default function GlobalRecordSaleModal() {
       minimized={isRecordSaleModalMinimized}
       onMinimize={() => { setRecordSaleModalMinimized(true); setRecordSaleModalOpen(false); }}
       onRestore={() => { setRecordSaleModalMinimized(false); setRecordSaleModalOpen(true); }}
+      onOutsideClick={() => { setRecordSaleModalMinimized(true); setRecordSaleModalOpen(false); }}
       minimizeLabel={recordSaleLocation ? `${shops.find(s => s.id === recordSaleLocation)?.name ?? ''} · ${recordSaleItems.filter(si => si.item_id).length} item(s)` : 'Selecting shop…'}
     >
       <form onSubmit={handleRecordSale} className="space-y-6">
@@ -195,6 +213,12 @@ export default function GlobalRecordSaleModal() {
                             );
                           })}
                       </select>
+                      {si.item_id && (
+                        <p className="mt-1.5 text-xs font-bold text-primary flex items-center gap-1.5 px-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+                          AVAILABLE: {availableQty}U
+                        </p>
+                      )}
                     </div>
                   </div>
                   

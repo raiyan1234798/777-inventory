@@ -4,7 +4,7 @@ import {
   Truck, Tag, Globe2, Package, Store, Upload, FileText, X, AlertTriangle,
   Pencil, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight,
   Warehouse as WarehouseIcon, Filter, BarChart3, TrendingUp, ArrowUpDown, Settings, MapPin,
-  History, CheckCircle, Edit3, Minus, RefreshCw, Eye, EyeOff
+  History, CheckCircle, Edit3, Minus, RefreshCw, Eye, EyeOff, Printer
 } from 'lucide-react';
 import clsx from 'clsx';
 import { db } from '../lib/firebase';
@@ -80,10 +80,10 @@ export default function Warehouse() {
   const {
     locations, brands, items, inventory, containers, transactions, expenses,
     addLocation, deleteLocation, addBrand, deleteBrand, deleteItem, updateItem,
-    addContainer, batchStockEntry, transfer, deleteStockEntry, deleteStockEntries,
+    addContainer, batchStockEntry, deleteStockEntry, deleteStockEntries,
     deleteItems, deleteContainers, deleteLocations, deleteBrands,
     clearMasterData, clearHistory, clearLocationStock,
-    setImportModalOpen, importSessions, deleteImportSession, fixImportStock
+    setImportModalOpen, importSessions, deleteImportSession, fixImportStock, createNotification
   } = useStore();
 
   const warehouses = locations.filter(l => l.type === 'warehouse');
@@ -178,11 +178,13 @@ export default function Warehouse() {
 
   // ── Import History State ────────────────────────────────────────────────────
   const [importHistorySearch, setImportHistorySearch] = useState('');
+  const [viewItemsSession, setViewItemsSession] = useState<ImportSession | null>(null);
   const [selectedSession, setSelectedSession] = useState<ImportSession | null>(null);
   const [isFixModalOpen, setIsFixModalOpen] = useState(false);
   const [isFixModalMinimized, setIsFixModalMinimized] = useState(false);
   const [fixModalSearch, setFixModalSearch] = useState('');
   const [fixItems, setFixItems] = useState<{
+    unique_id: string;
     item_id: string;
     item_name: string;
     sku: string;
@@ -194,6 +196,7 @@ export default function Warehouse() {
     diff: number;
     itemDeleted?: boolean;
     stockRecordDeleted?: boolean;
+    sessionItemIndex: number;
   }[]>([]);
   const [fixSaving, setFixSaving] = useState(false);
   const [deleteSessionConfirm, setDeleteSessionConfirm] = useState<string | null>(null);
@@ -275,11 +278,7 @@ export default function Warehouse() {
       const matchLocation = !filterLocation || r.location_id === filterLocation;
       const matchCategory = !filterCategory || r.item.category === filterCategory;
       const matchBrand = !filterBrand || r.item.brand_id === filterBrand;
-      const matchStatus = !filterStockStatus ||
-        (filterStockStatus === 'low' && r.isLow) ||
-        (filterStockStatus === 'healthy' && !r.isLow && !r.isOut) ||
-        (filterStockStatus === 'out' && r.isOut);
-      return matchSearch && matchLocation && matchCategory && matchBrand && matchStatus;
+      return matchSearch && matchLocation && matchCategory && matchBrand;
     });
 
     if (!filterLocation) {
@@ -322,6 +321,15 @@ export default function Warehouse() {
           : 0;
       }
     }
+
+    // Now filter by stock status (must be done AFTER grouping so total quantity is correct)
+    rows = rows.filter(r => {
+      if (!filterStockStatus) return true;
+      if (filterStockStatus === 'low') return r.isLow;
+      if (filterStockStatus === 'healthy') return !r.isLow && !r.isOut;
+      if (filterStockStatus === 'out') return r.isOut;
+      return true;
+    });
 
     // Sort
     rows.sort((a, b) => {
@@ -744,8 +752,21 @@ export default function Warehouse() {
           currency: onboardForm.currency,
         })),
         appUser?.name ?? 'Admin',
-        { isPending: true }
+        { isPending: true, skipNotifications: true }
       );
+
+      // Generate a single consolidated notification
+      const locName = locations.find(l => l.id === onboardForm.location_id)?.name ?? 'Warehouse';
+      const totalItems = onboardForm.rows.reduce((acc, r) => acc + r.quantity, 0);
+      const uniqueNames = Array.from(new Set(onboardForm.rows.map(r => r.item_name)));
+      const summary = uniqueNames.length <= 2 ? uniqueNames.join(' and ') : `${uniqueNames.slice(0, 2).join(', ')} and ${uniqueNames.length - 2} other(s)`;
+      
+      await createNotification({
+        type: 'stock_entry',
+        location_id: onboardForm.location_id,
+        message: `📦 Stock Onboarded: ${totalItems} units across ${onboardForm.rows.length} items (${summary}) added to ${locName}.`,
+        target_roles: ['super_admin', 'admin', 'warehouse_staff']
+      });
 
       // Save Import Session for manual container onboarding so it shows up in Import History
       const sessionItems = onboardForm.rows.map(row => {
@@ -953,11 +974,12 @@ export default function Warehouse() {
   const openFixModal = (session: ImportSession) => {
     setSelectedSession(session);
     setFixModalSearch('');
-    const rows = session.items.map(si => {
+    const rows = session.items.map((si, idx) => {
       const itemExists = items.some(it => it.id === si.item_id);
       const invEntry = inventory.find(e => e.item_id === si.item_id && e.location_id === session.location_id);
       const current = invEntry?.quantity ?? 0;
       return {
+        unique_id: `${si.item_id}_${idx}`,
         item_id: si.item_id,
         item_name: si.item_name,
         sku: si.sku,
@@ -969,6 +991,7 @@ export default function Warehouse() {
         diff: 0,
         itemDeleted: !itemExists,
         stockRecordDeleted: !invEntry,
+        sessionItemIndex: idx,
       };
     });
     setFixItems(rows);
@@ -976,10 +999,10 @@ export default function Warehouse() {
     setIsFixModalMinimized(false);
   };
 
-  const handleFixQtyChange = (itemId: string, val: number) => {
+  const handleFixQtyChange = (uniqueId: string, val: number) => {
     setFixItems(prev => {
       return prev.map(row => {
-        if (row.item_id !== itemId) return row;
+        if (row.unique_id !== uniqueId) return row;
         return {
           ...row,
           newReceivedQty: val,
@@ -997,7 +1020,12 @@ export default function Warehouse() {
     try {
       await fixImportStock(
         selectedSession.id,
-        changed.map(r => ({ item_id: r.item_id, newQty: r.newReceivedQty, location_id: selectedSession.location_id }))
+        changed.map(r => ({
+          item_id: r.item_id,
+          location_id: selectedSession.location_id,
+          newQty: r.newReceivedQty,
+          sessionItemIndex: r.sessionItemIndex
+        }))
       );
       alert(`✅ Import stocks reconciled! ${changed.length} item(s) adjusted.`);
       setIsFixModalOpen(false);
@@ -1220,7 +1248,16 @@ export default function Warehouse() {
           <p className={clsx("text-2xl sm:text-3xl font-extrabold mt-2", potentialProfit > 0 ? 'text-violet-600' : 'text-gray-900')}>{formatCurrency(potentialProfit)}</p>
           <p className="text-[10px] text-gray-400 mt-5 font-medium">Retail − Cost on current stock</p>
         </div>
-        <div className="bg-white rounded-2xl border border-gray-100 p-4 sm:p-5 shadow-sm hover:shadow-md transition-all">
+        <div 
+          className={clsx(
+            "bg-white rounded-2xl border p-4 sm:p-5 shadow-sm hover:shadow-md transition-all cursor-pointer",
+            filterStockStatus === 'out' ? "border-red-500 ring-2 ring-red-500/20" : "border-gray-100"
+          )}
+          onClick={() => {
+            setActiveTab('inventory');
+            setFilterStockStatus(prev => prev === 'out' ? '' : 'out');
+          }}
+        >
           <div className="flex items-center justify-between">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Stock Alerts</p>
             <div className={clsx("w-8 h-8 rounded-lg flex items-center justify-center", (lowCount + outCount) > 0 ? "bg-red-50 text-red-500 animate-pulse" : "bg-gray-50 text-gray-400")}>
@@ -2505,10 +2542,10 @@ export default function Warehouse() {
                           {/* Right: actions */}
                           <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
                             <button
-                              onClick={() => setExpandedSessions(p => ({ ...p, [session.id]: !p[session.id] }))}
-                              className="px-3 py-2 bg-gray-100 text-gray-700 text-xs font-bold rounded-xl hover:bg-gray-200 transition-all shadow-sm"
+                              onClick={() => setViewItemsSession(session)}
+                              className="px-3 py-2 bg-gray-100 text-gray-700 text-xs font-bold rounded-xl hover:bg-gray-200 transition-all shadow-sm flex items-center gap-1.5"
                             >
-                              {expandedSessions[session.id] ? 'Hide Items' : 'View Items'}
+                              <Eye className="w-3.5 h-3.5" /> View Items
                             </button>
                             {/* Fix Stocks Report download buttons */}
                             <div className="flex items-center gap-1">
@@ -2591,22 +2628,7 @@ export default function Warehouse() {
                           </div>
                         </div>
 
-                        {/* Collapsed item list preview */}
-                        {expandedSessions[session.id] && (
-                          <div className="border-t border-gray-50 px-5 py-3 bg-gray-50/50 rounded-b-2xl">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Items preview:</span>
-                              {session.items.slice(0, 20).map((it, i) => (
-                                <span key={i} className="text-[10px] bg-white border border-gray-100 text-gray-600 rounded-lg px-2 py-0.5">
-                                  {it.item_name} <span className="font-bold text-indigo-600">×{it.receivedQty}</span>
-                                </span>
-                              ))}
-                              {session.items.length > 20 && (
-                                <span className="text-[10px] text-gray-400">+{session.items.length - 20} more</span>
-                              )}
-                            </div>
-                          </div>
-                        )}
+                        {/* Inline preview removed */}
                       </div>
                     );
                   })}
@@ -2634,6 +2656,88 @@ export default function Warehouse() {
                     >
                       Delete Record
                     </button>
+                  </div>
+                </Modal>
+              )}
+
+              {/* ── View Items Modal ── */}
+              {viewItemsSession && (
+                <Modal
+                  isOpen={!!viewItemsSession}
+                  onClose={() => setViewItemsSession(null)}
+                  title={`View Items — ${viewItemsSession.fileName}`}
+                  description={`Review the imported items and their adjusted stocks for ${locations.find(l => l.id === viewItemsSession.location_id)?.name ?? viewItemsSession.location_id}.`}
+                  size="xl"
+                >
+                  <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm flex flex-col h-[60vh]">
+                    <div className="overflow-y-auto flex-1 p-0 m-0">
+                      <table className="w-full text-left text-sm whitespace-nowrap">
+                        <thead className="bg-gray-50/80 sticky top-0 z-10 text-xs font-semibold text-gray-500 uppercase tracking-wider backdrop-blur-sm shadow-sm">
+                          <tr>
+                            <th className="px-4 py-3">Item</th>
+                            <th className="px-4 py-3">Brand</th>
+                            <th className="px-4 py-3">SKU</th>
+                            <th className="px-4 py-3 text-right">Invoice Qty</th>
+                            <th className="px-4 py-3 text-right">Received Qty</th>
+                            <th className="px-4 py-3 text-right">Difference</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {viewItemsSession.items.map((it, idx) => {
+                            const isAdjusted = it.invoiceQty !== it.receivedQty;
+                            const diff = (it.receivedQty || 0) - (it.invoiceQty || 0);
+                            let diffColor = "text-gray-400";
+                            if (diff > 0) diffColor = "text-emerald-600 font-bold";
+                            if (diff < 0) diffColor = "text-red-600 font-bold";
+
+                            return (
+                              <tr key={idx} className={isAdjusted ? "bg-amber-50/60 hover:bg-amber-100/50 transition-colors border-l-2 border-l-amber-400" : "hover:bg-gray-50/50 transition-colors border-l-2 border-l-transparent"}>
+                                <td className="px-4 py-3 font-medium text-gray-900">{it.item_name}</td>
+                                <td className="px-4 py-3 text-gray-500">
+                                  <span className="px-2 py-0.5 bg-gray-100 rounded text-xs">{it.brand}</span>
+                                </td>
+                                <td className="px-4 py-3 text-gray-400 text-xs font-mono">{it.sku}</td>
+                                <td className="px-4 py-3 text-right font-medium text-gray-600">{it.invoiceQty}</td>
+                                <td className={`px-4 py-3 text-right font-bold ${isAdjusted ? 'text-amber-600' : 'text-indigo-600'}`}>{it.receivedQty}</td>
+                                <td className={`px-4 py-3 text-right ${diffColor}`}>
+                                  {diff > 0 ? `+${diff}` : diff}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-gray-100">
+                    <button
+                      onClick={async () => {
+                        try {
+                          const { exportFixStocksReport } = await import('../lib/bulkOperations');
+                          const locName = locations.find(l => l.id === viewItemsSession.location_id)?.name ?? viewItemsSession.location_id;
+                          await exportFixStocksReport({
+                            filename: `ViewItems_Report_${viewItemsSession.fileName.replace(/[^a-zA-Z0-9]/g, '_')}`,
+                            items: viewItemsSession.items.map(it => ({
+                              ...it,
+                              originalReceivedQty: it.invoiceQty,
+                              newReceivedQty: it.receivedQty
+                            })),
+                            adjustedOnly: false,
+                            sessionMeta: {
+                              fileName: viewItemsSession.fileName,
+                              locationName: locName,
+                              importDate: new Date(viewItemsSession.date).toLocaleString('en-IN')
+                            }
+                          });
+                        } catch (e: any) {
+                          alert('Export failed: ' + e.message);
+                        }
+                      }}
+                      className="btn-secondary flex items-center gap-2"
+                    >
+                      <Printer className="w-4 h-4" /> Download PDF
+                    </button>
+                    <button onClick={() => setViewItemsSession(null)} className="btn-secondary">Close</button>
                   </div>
                 </Modal>
               )}
@@ -2720,6 +2824,7 @@ export default function Warehouse() {
                                      
                                      // Add to session
                                      setFixItems(prev => [{
+                                        unique_id: `${newItemId}_${Date.now()}`,
                                         item_id: newItemId,
                                         item_name: quickAddItemData.name,
                                         sku: quickAddItemData.sku,
@@ -2729,7 +2834,9 @@ export default function Warehouse() {
                                         originalReceivedQty: 0,
                                         newReceivedQty: 1,
                                         diff: 1,
-                                        itemDeleted: false
+                                        itemDeleted: false,
+                                        stockRecordDeleted: false,
+                                        sessionItemIndex: -1
                                      }, ...prev]);
                                      
                                      setShowQuickAddItem(false);
@@ -2760,6 +2867,7 @@ export default function Warehouse() {
                                 if (item) {
                                   const existingInv = inventory.find(inv => inv.location_id === selectedSession.location_id && inv.item_id === itemId);
                                   setFixItems(prev => [{
+                                    unique_id: `${item.id}_${Date.now()}`,
                                     item_id: item.id,
                                     item_name: item.name,
                                     sku: item.sku || 'No SKU',
@@ -2769,7 +2877,9 @@ export default function Warehouse() {
                                     originalReceivedQty: 0,
                                     newReceivedQty: 1,
                                     diff: 1,
-                                    itemDeleted: false
+                                    itemDeleted: false,
+                                    stockRecordDeleted: false,
+                                    sessionItemIndex: -1
                                   }, ...prev]);
                                 }
                               }
@@ -2832,7 +2942,7 @@ export default function Warehouse() {
                           {filteredFixItems.map((row) => {
                             const mismatch = row.newReceivedQty - row.invoiceQty;
                             return (
-                              <tr key={row.item_id} className={clsx('transition-colors', row.diff !== 0 ? 'bg-indigo-50/40' : 'bg-white hover:bg-gray-50/50')}>
+                              <tr key={row.unique_id} className={clsx('transition-colors', row.diff !== 0 ? 'bg-indigo-50/40' : 'bg-white hover:bg-gray-50/50')}>
                                 <td className="px-4 py-2.5">
                                   <div className="flex flex-col gap-0.5">
                                     <span className="text-xs font-semibold text-gray-900">{row.item_name}</span>
@@ -2865,7 +2975,7 @@ export default function Warehouse() {
                                   <div className="flex items-center justify-end gap-1">
                                     <button
                                       type="button"
-                                      onClick={() => handleFixQtyChange(row.item_id, Math.max(0, row.newReceivedQty - 1))}
+                                      onClick={() => handleFixQtyChange(row.unique_id, Math.max(0, row.newReceivedQty - 1))}
                                       className="p-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-500 transition"
                                     >
                                       <Minus className="w-3 h-3" />
@@ -2874,12 +2984,12 @@ export default function Warehouse() {
                                       type="number"
                                       min={0}
                                       value={row.newReceivedQty}
-                                      onChange={e => handleFixQtyChange(row.item_id, Math.max(0, Number(e.target.value)))}
+                                      onChange={e => handleFixQtyChange(row.unique_id, Math.max(0, Number(e.target.value)))}
                                       className="w-16 text-right text-xs font-bold text-indigo-700 border border-indigo-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-indigo-300 bg-white outline-none"
                                     />
                                     <button
                                       type="button"
-                                      onClick={() => handleFixQtyChange(row.item_id, row.newReceivedQty + 1)}
+                                      onClick={() => handleFixQtyChange(row.unique_id, row.newReceivedQty + 1)}
                                       className="p-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-500 transition"
                                     >
                                       <Plus className="w-3 h-3" />

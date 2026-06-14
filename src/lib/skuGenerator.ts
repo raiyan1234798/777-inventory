@@ -86,15 +86,7 @@ export function generateBrandSKU(
   // Final sanitization of double hyphens or spacing
   base = base.replace(/-+/g, '-').trim();
 
-  if (!existingSkus.has(base)) return base;
-
-  // Append incrementing suffix to avoid collision
-  let seq = 2;
-  while (existingSkus.has(`${base}-${seq}`)) {
-    seq++;
-    if (seq > 9999) break; // safety valve
-  }
-  return `${base}-${seq}`;
+  return base;
 }
 
 export function canonicalSKU(brandName: string, itemName: string, codeOverride?: string): string {

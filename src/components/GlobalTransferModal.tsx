@@ -7,9 +7,10 @@ import { useAuthStore } from '../store/authStore';
 export default function GlobalTransferModal() {
   const { appUser } = useAuthStore();
   const { 
-    locations, items, inventory, transfer, brands,
+    locations, items, inventory, brands,
     isTransferModalOpen, isTransferModalMinimized, transferForm, transferItems,
-    setTransferModalOpen, setTransferModalMinimized, setTransferForm, setTransferItems
+    setTransferModalOpen, setTransferModalMinimized, setTransferForm, setTransferItems,
+    recordTransfer, createNotification
   } = useStore();
 
   const [saving, setSaving] = useState(false);
@@ -82,6 +83,7 @@ export default function GlobalTransferModal() {
         performed_by: appUser?.name ?? 'Staff',
         notes: transferNote.trim() || undefined
       });
+
       setTransferModalOpen(false);
       setTransferModalMinimized(false);
       setTransferForm({ from_location: '', to_location: '' });
@@ -113,6 +115,7 @@ export default function GlobalTransferModal() {
     <Modal
       isOpen={isTransferModalOpen || isTransferModalMinimized}
       onClose={handleClose}
+      onOutsideClick={() => { setTransferModalMinimized(true); setTransferModalOpen(false); }}
       title="Transfer Items"
       description="Transfer items between shops."
       size="md"

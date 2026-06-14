@@ -13,27 +13,39 @@ import ManageWarehouses from './pages/ManageWarehouses';
 import Reports from './pages/Reports';
 import StockReports from './pages/StockReports';
 import Insights from './pages/Insights';
+import Login from './pages/Login';
+import ProtectedRoute from './components/ProtectedRoute';
+import { useEffect } from 'react';
+import { initAuth } from './store/authStore';
 
 function App() {
+  useEffect(() => {
+    initAuth();
+  }, []);
+
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
-          <Route path="warehouse" element={<Warehouse />} />
-          <Route path="shops" element={<Shops />} />
-          <Route path="transfers" element={<Transfers />} />
-          <Route path="returns" element={<Returns />} />
-          <Route path="finance" element={<Finance />} />
-          <Route path="reports" element={<Reports />} />
-          <Route path="stock-reports" element={<StockReports />} />
-          <Route path="insights" element={<Insights />} />
-          <Route path="users" element={<Users />} />
-          <Route path="notifications" element={<Notifications />} />
-          <Route path="manage-shops" element={<ManageShops />} />
-          <Route path="manage-warehouses" element={<ManageWarehouses />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/login" element={<Login />} />
+        
+        <Route element={<ProtectedRoute />}>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<Navigate to="/dashboard" replace />} />
+            <Route path="dashboard" element={<Dashboard />} />
+            <Route path="warehouse" element={<Warehouse />} />
+            <Route path="shops" element={<Shops />} />
+            <Route path="transfers" element={<Transfers />} />
+            <Route path="returns" element={<Returns />} />
+            <Route path="finance" element={<Finance />} />
+            <Route path="reports" element={<Reports />} />
+            <Route path="stock-reports" element={<StockReports />} />
+            <Route path="insights" element={<Insights />} />
+            <Route path="users" element={<Users />} />
+            <Route path="notifications" element={<Notifications />} />
+            <Route path="manage-shops" element={<ManageShops />} />
+            <Route path="manage-warehouses" element={<ManageWarehouses />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Route>
         </Route>
       </Routes>
     </Router>

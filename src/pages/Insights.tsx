@@ -4,7 +4,7 @@ import {
   TrendingUp, TrendingDown, AlertTriangle,
   BarChart2, CheckCircle2, Warehouse, Store,
   Search, Package, Eye, XCircle, ShoppingCart,
-  ChevronDown, ChevronUp, MapPin
+  ChevronDown, ChevronUp, MapPin, Truck
 } from 'lucide-react';
 import { subDays } from 'date-fns';
 import clsx from 'clsx';
@@ -16,7 +16,7 @@ type SortField = 'name' | 'stock' | 'min_limit' | 'sold' | 'revenue';
 type SortDir = 'asc' | 'desc';
 
 export default function Insights() {
-  const { inventory, items, sales, transactions, locations, brands } = useStore();
+  const { inventory, items, sales, transactions, locations, brands, setTransferModalOpen, setTransferForm, setTransferItems } = useStore();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -107,6 +107,65 @@ export default function Insights() {
     out: analysis.itemList.filter(i => i.status === 'out_of_stock').length,
     noSales: analysis.itemList.filter(i => i.status === 'no_sales').length,
   }), [analysis.itemList]);
+
+  // ─── Fast Moving Shop Refills ──────────────────────────────────────────
+  const fastMovingShopNeeds = useMemo(() => {
+    const thirtyDaysAgo = subDays(new Date(), 30);
+    const shopSales: Record<string, { qty: number, locId: string, itemId: string }> = {};
+    
+    sales.forEach(s => {
+      if (new Date(s.timestamp) >= thirtyDaysAgo) {
+        const loc = locations.find(l => l.id === s.location_id);
+        if (loc && loc.type === 'shop') {
+          const key = `${s.location_id}_${s.item_id}`;
+          if (!shopSales[key]) shopSales[key] = { qty: 0, locId: s.location_id, itemId: s.item_id };
+          shopSales[key].qty += s.quantity || 0;
+        }
+      }
+    });
+
+    const needs: any[] = [];
+    Object.values(shopSales).forEach(ss => {
+      if (ss.qty > 0) {
+        const item = items.find(i => i.id === ss.itemId);
+        if (!item) return;
+        const shopInv = inventory.find(e => e.location_id === ss.locId && e.item_id === ss.itemId);
+        const shopQty = shopInv ? shopInv.quantity : 0;
+        
+        const whInventory = inventory.filter(e => {
+          const l = locations.find(loc => loc.id === e.location_id);
+          return l?.type === 'warehouse' && e.item_id === ss.itemId && e.quantity > 0;
+        });
+        
+        let bestWh = null;
+        if (whInventory.length > 0) {
+          bestWh = whInventory.reduce((prev, curr) => prev.quantity > curr.quantity ? prev : curr);
+        }
+
+        needs.push({
+           shopId: ss.locId,
+           shopName: locations.find(l => l.id === ss.locId)?.name,
+           itemId: ss.itemId,
+           itemName: item.name,
+           brandName: brands.find(b => b.id === item.brand_id)?.name,
+           sold30d: ss.qty,
+           shopQty,
+           whId: bestWh?.location_id,
+           whName: bestWh ? locations.find(l => l.id === bestWh.location_id)?.name : null,
+           whQty: bestWh?.quantity || 0,
+           brandId: item.brand_id
+        });
+      }
+    });
+    
+    return needs.sort((a, b) => b.sold30d - a.sold30d).slice(0, 5);
+  }, [sales, locations, items, inventory, brands]);
+
+  const handleRefillClick = (need: any) => {
+    setTransferForm({ from_location: need.whId, to_location: need.shopId });
+    setTransferItems([{ brand_id: need.brandId, item_id: need.itemId, quantity: 1, _id: Date.now() }]);
+    setTransferModalOpen(true);
+  };
 
   // ─── Categories ────────────────────────────────────────────────────────
   const categories = useMemo(() => {
@@ -225,7 +284,7 @@ export default function Insights() {
         </div>
 
         {/* ─── Highlight Cards ─────────────────────────────────────── */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           {/* Needs Restocking */}
           <div className="bg-white rounded-2xl border border-gray-100 p-5">
             <div className="flex items-center justify-between mb-4">
@@ -319,6 +378,42 @@ export default function Insights() {
                       <p className="text-[10px] text-gray-400">{item.orders} orders</p>
                     </div>
                     <p className="text-xs font-bold text-emerald-600 flex-shrink-0">{formatCurrency(item.profit)}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Fast Moving Shop Refills */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                <Truck className="w-4 h-4 text-blue-500" />
+                Shop Fast Sellers
+              </h3>
+              <span className="text-[10px] font-medium text-gray-400">Top items by shop</span>
+            </div>
+            {fastMovingShopNeeds.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">No shop sales recorded.</p>
+            ) : (
+              <div className="space-y-2">
+                {fastMovingShopNeeds.map((need, idx) => (
+                  <div key={`${need.shopId}-${need.itemId}`} className="flex items-center gap-3 p-2.5 rounded-xl bg-blue-50/50 hover:bg-blue-50 transition-colors">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-gray-900 truncate">{need.itemName}</p>
+                      <p className="text-[10px] text-gray-500 font-medium truncate">
+                        {need.shopName}: <span className={need.shopQty > 0 ? "text-gray-900" : "text-red-500 font-bold"}>{need.shopQty} left</span> · Sold {need.sold30d}
+                      </p>
+                    </div>
+                    {need.whId ? (
+                      <button type="button" onClick={() => handleRefillClick(need)} className="text-[9px] font-bold bg-blue-100 text-blue-600 px-2 py-1 rounded-md hover:bg-blue-200 transition-colors flex-shrink-0 cursor-pointer">
+                        Refill
+                      </button>
+                    ) : (
+                      <span className="text-[9px] font-medium text-gray-400 px-2 py-1 flex-shrink-0">
+                        No WH Stock
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
