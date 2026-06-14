@@ -65,7 +65,7 @@ export const initAuth = () => {
         
         appUser = {
           id: newDocRef.id,
-          name: firebaseUser.displayName || firebaseUser.email || 'Unknown User',
+          name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Unknown User',
           email: firebaseUser.email || '',
           role: isSuperAdmin ? 'super_admin' : 'shop_staff',
           location_id: '',
