@@ -1,7 +1,3 @@
 /*
-  X-Frame-Options: DENY
-  X-Content-Type-Options: nosniff
-  X-XSS-Protection: 1; mode=block
-  Referrer-Policy: strict-origin-when-cross-origin
-  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://apis.google.com https://www.gstatic.com https://*.firebaseio.com https://www.googletagmanager.com; connect-src 'self' https://*.firebaseio.com https://*.googleapis.com wss://*.firebaseio.com https://www.google-analytics.com; img-src 'self' data: https://*.googleusercontent.com https://www.google-analytics.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; frame-src https://*.firebaseapp.com;
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Cross-Origin-Embedder-Policy: unsafe-none
