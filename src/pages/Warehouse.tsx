@@ -2171,6 +2171,9 @@ export default function Warehouse() {
                     }}
                     className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white font-medium"
                   >
+                    {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
+                  </select>
+                </div>
                 {Math.ceil(filteredItems.length / pageSize) > 1 && (
                   <div className="flex items-center gap-1">
                     <button type="button" title="Previous page" disabled={itemsPage === 1} onClick={() => setItemsPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>

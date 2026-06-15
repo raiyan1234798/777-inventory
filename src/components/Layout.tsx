@@ -149,7 +149,6 @@ export default function Layout() {
             </div>
             <div className="flex flex-col min-w-0">
               <span className="text-sm font-semibold text-gray-900 truncate">{appUser?.name || 'User'}</span>
-              <span className="text-xs text-gray-400 capitalize truncate">{appUser?.role?.replace(/_/g, ' ') || 'Guest'}</span>
             </div>
           </div>
           <button

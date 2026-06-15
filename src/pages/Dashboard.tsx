@@ -22,6 +22,10 @@ export default function Dashboard() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [drillDownType, setDrillDownType] = useState<'item' | 'global'>('global');
 
+  const [quickRestockItem, setQuickRestockItem] = useState<{ item_id: string, item_name: string, default_cost: number, currency: string } | null>(null);
+  const [quickRestockForm, setQuickRestockForm] = useState({ quantity: 1, unit_cost: 0, location_id: '' });
+  const [isQuickRestocking, setIsQuickRestocking] = useState(false);
+
   const stockDistribution = useMemo(() => {
     const targetItems = drillDownType === 'item' && selectedItemId 
       ? items.filter(i => i.id === selectedItemId)
@@ -128,6 +132,31 @@ export default function Dashboard() {
     if (id === 'supplier') return 'Supplier';
     if (id === 'customer') return 'Customer';
     return locations.find(l => l.id === id)?.name ?? id;
+  };
+
+  const handleQuickRestock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickRestockItem || !quickRestockForm.location_id || quickRestockForm.quantity <= 0) return;
+    setIsQuickRestocking(true);
+    try {
+      await useStore.getState().batchStockEntry([{
+        container_id: 'quick_restock',
+        location_id: quickRestockForm.location_id,
+        item_id: quickRestockItem.item_id,
+        item_name: quickRestockItem.item_name,
+        quantity: quickRestockForm.quantity,
+        unit_cost: quickRestockForm.unit_cost,
+        currency: quickRestockItem.currency,
+      }], appUser?.name ?? 'Admin');
+      
+      setQuickRestockItem(null);
+      setQuickRestockForm({ quantity: 1, unit_cost: 0, location_id: '' });
+      alert('Stock added successfully!');
+    } catch (err: any) {
+      alert('Failed to restock: ' + err.message);
+    } finally {
+      setIsQuickRestocking(false);
+    }
   };
 
   const unreadAlerts = notifications.filter(n => n.type === 'low_stock' && n.status === 'unread');
@@ -341,9 +370,23 @@ export default function Dashboard() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                            <p className="text-base font-black text-gray-900 truncate tracking-tight">{tx.item_name}</p>
-                           <span className={clsx("text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter", meta.color)}>
-                             {meta.label}
-                           </span>
+                           {tx.type === 'stock_entry' ? (
+                             <button 
+                               onClick={(e) => {
+                                 e.stopPropagation();
+                                 setQuickRestockItem({ item_id: tx.item_id, item_name: tx.item_name, default_cost: tx.unit_cost, currency: tx.currency });
+                                 setQuickRestockForm({ quantity: 1, unit_cost: tx.unit_cost, location_id: tx.to_location });
+                               }}
+                               className={clsx("text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter hover:scale-105 transition-transform cursor-pointer", meta.color)}
+                               title="Click to Quick Restock"
+                             >
+                               {meta.label}
+                             </button>
+                           ) : (
+                             <span className={clsx("text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter", meta.color)}>
+                               {meta.label}
+                             </span>
+                           )}
                         </div>
                         <div className="text-[10px] text-gray-400 font-bold uppercase tracking-tight mt-1 flex items-center gap-2">
                           <span className="truncate max-w-[120px]">{getLocationName(tx.from_location)}</span>
@@ -526,6 +569,45 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      </Modal>
+
+      {/* Quick Restock Modal */}
+      <Modal 
+        isOpen={!!quickRestockItem} 
+        onClose={() => setQuickRestockItem(null)} 
+        title="Quick Restock" 
+        description={`Add new inventory for ${quickRestockItem?.item_name}`}
+        size="sm"
+      >
+        <form onSubmit={handleQuickRestock} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Target Location</label>
+            <select required className="input-field" value={quickRestockForm.location_id} onChange={e => setQuickRestockForm(f => ({ ...f, location_id: e.target.value }))}>
+              <option value="">Select location...</option>
+              {locations.map(l => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Quantity</label>
+              <input type="number" min="1" required className="input-field" value={quickRestockForm.quantity} onChange={e => setQuickRestockForm(f => ({ ...f, quantity: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Unit Cost ({quickRestockItem?.currency || 'USD'})</label>
+              <input type="number" min="0" step="0.01" required className="input-field" value={quickRestockForm.unit_cost} onChange={e => setQuickRestockForm(f => ({ ...f, unit_cost: Number(e.target.value) }))} />
+            </div>
+          </div>
+
+          <div className="pt-4 flex gap-3">
+            <button type="button" className="btn-secondary flex-1" onClick={() => setQuickRestockItem(null)}>Cancel</button>
+            <button type="submit" disabled={isQuickRestocking} className="btn-primary flex-1">
+              {isQuickRestocking ? 'Adding...' : 'Confirm Restock'}
+            </button>
+          </div>
+        </form>
       </Modal>
     </>
   );
