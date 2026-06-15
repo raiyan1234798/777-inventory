@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { RotateCcw, Plus, AlertTriangle, Search, MapPin, Image as ImageIcon, FileUp, X } from 'lucide-react';
+import { RotateCcw, Plus, AlertTriangle, Search, MapPin, Image as ImageIcon, FileUp, X, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { useStore } from '../store';
 import { useAuthStore } from '../store/authStore';
@@ -7,7 +7,7 @@ import { format } from 'date-fns';
 import clsx from 'clsx';
 
 export default function Returns() {
-  useAuthStore();
+  const { hasPermission } = useAuthStore();
   const { setReturnModalOpen, setReturnModalMinimized } = useStore();
   const { locations, items, brands, inventory, returns: returnRecords, processReturn } = useStore();
 
@@ -115,6 +115,7 @@ export default function Returns() {
                       <th className="px-6 py-4">Location</th>
                       <th className="px-6 py-4 text-right">Units</th>
                       <th className="px-6 py-4">Status Flag</th>
+                      <th className="px-6 py-4">Processed By</th>
                       <th className="px-6 py-4">Timestamp</th>
                     </tr>
                   </thead>
@@ -166,7 +167,27 @@ export default function Returns() {
                                <ImageIcon className="w-4 h-4" />
                              </button>
                            )}
+                           {hasPermission('delete') && (
+                             <button
+                               onClick={async () => {
+                                 if (window.confirm(`Are you sure you want to delete this return for ${r.item_name}?`)) {
+                                   try {
+                                     await useStore.getState().deleteReturn(r.id);
+                                   } catch (e: any) {
+                                     alert('Failed to delete return: ' + e.message);
+                                   }
+                                 }
+                               }}
+                               className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                               title="Delete Return"
+                             >
+                               <Trash2 className="w-4 h-4" />
+                             </button>
+                           )}
                           </div>
+                        </td>
+                        <td className="px-6 py-5">
+                          <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">{r.performed_by || 'System/Legacy'}</span>
                         </td>
                         <td className="px-6 py-5 text-gray-400 text-[11px] font-bold tabular-nums">
                           {format(new Date(r.timestamp), 'MMM dd, yyyy HH:mm')}
@@ -229,8 +250,28 @@ export default function Returns() {
                               <ImageIcon className="w-3.5 h-3.5" />
                             </button>
                           )}
+                          {hasPermission('delete') && (
+                            <button
+                              onClick={async () => {
+                                if (window.confirm(`Are you sure you want to delete this return for ${r.item_name}?`)) {
+                                  try {
+                                    await useStore.getState().deleteReturn(r.id);
+                                  } catch (e: any) {
+                                    alert('Failed to delete return: ' + e.message);
+                                  }
+                                }
+                              }}
+                              className="ml-2 p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Delete Return"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
-                        <p className="text-gray-400 text-[9px] font-bold">{format(new Date(r.timestamp), 'MMM dd, HH:mm')}</p>
+                        <div className="flex flex-col items-end">
+                          <p className="text-gray-900 text-[10px] font-bold uppercase tracking-widest">{r.performed_by || 'System/Legacy'}</p>
+                          <p className="text-gray-400 text-[9px] font-bold">{format(new Date(r.timestamp), 'MMM dd, HH:mm')}</p>
+                        </div>
                       </div>
                     </div>
                   ))}

@@ -453,6 +453,128 @@ export async function exportFixStocksReport(data: {
   XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
 }
 
+export async function printFixStocksPDF(data: {
+  filename: string;
+  items: any[];
+  adjustedOnly?: boolean;
+  sessionMeta?: {
+    fileName?: string;
+    locationName?: string;
+    importDate?: string;
+  };
+}) {
+  const { items, adjustedOnly, sessionMeta } = data;
+
+  const enriched = items.map(item => {
+    const invoiceQty   = item.invoiceQty     ?? item.originalReceivedQty ?? 0;
+    const receivedQty  = item.receivedQty    ?? item.originalReceivedQty ?? 0;
+    const postFixQty   = item.newReceivedQty ?? item.newQty ?? receivedQty;
+    const fixDelta     = postFixQty - receivedQty;
+    const netChange    = postFixQty - invoiceQty;
+
+    let status: string;
+    if (invoiceQty === 0 && postFixQty > 0)  status = 'Added';
+    else if (invoiceQty === 0 && postFixQty === 0) status = 'Not Received';
+    else if (postFixQty === invoiceQty)             status = 'Matches Invoice';
+    else if (postFixQty > invoiceQty)               status = 'Excess';
+    else                                            status = 'Shortage';
+
+    if (fixDelta !== 0) status += ' (Fixed)';
+
+    return {
+      item_name:  item.item_name  || 'Unknown',
+      sku:        item.sku        || '—',
+      brand:      item.brand      || '—',
+      invoiceQty,
+      receivedQty,
+      postFixQty,
+      fixDelta,
+      netChange,
+      status,
+    };
+  });
+
+  const toExport = adjustedOnly
+    ? enriched.filter(i => i.fixDelta !== 0 || i.invoiceQty !== i.receivedQty)
+    : enriched;
+
+  if (toExport.length === 0) {
+    throw new Error('No items to export for the selected filter.');
+  }
+
+  const win = window.open('', '_blank');
+  if (!win) {
+    alert("Popup blocked! Please allow popups for this site to print to PDF.");
+    return;
+  }
+
+  let html = `
+    <html>
+      <head>
+        <title>Import Reconciliation Report</title>
+        <style>
+          body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 11px; margin: 20px; color: #000; }
+          .header { text-align: center; margin-bottom: 20px; }
+          .header h2 { margin: 0 0 5px 0; }
+          .header p { margin: 2px 0; color: #555; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          th, td { border: 1px solid #000; padding: 6px; text-align: center; font-size: 10px; }
+          td:nth-child(2) { text-align: left; }
+          th { background-color: #f0f0f0; font-weight: bold; }
+          @media print {
+            @page { margin: 1cm; }
+            th { background-color: #f0f0f0 !important; -webkit-print-color-adjust: exact; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h2>TRIPLE SEVEN INVESTMENTS LTD</h2>
+          <h3>Import Reconciliation Report</h3>
+          ${sessionMeta?.fileName ? `<p><strong>File:</strong> ${sessionMeta.fileName}</p>` : ''}
+          ${sessionMeta?.locationName ? `<p><strong>Location:</strong> ${sessionMeta.locationName}</p>` : ''}
+          ${sessionMeta?.importDate ? `<p><strong>Date:</strong> ${sessionMeta.importDate}</p>` : ''}
+          <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Item Name</th>
+              <th>SKU</th>
+              <th>Brand</th>
+              <th>Invoice Qty</th>
+              <th>Received Qty</th>
+              <th>Diff</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${toExport.map((item, idx) => `
+              <tr>
+                <td>${idx + 1}</td>
+                <td>${item.item_name}</td>
+                <td>${item.sku}</td>
+                <td>${item.brand}</td>
+                <td>${item.invoiceQty}</td>
+                <td>${item.postFixQty}</td>
+                <td>${item.netChange === 0 ? 0 : (item.netChange > 0 ? '+' + item.netChange : item.netChange)}</td>
+                <td>${item.status}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </body>
+      <script>
+        window.onload = function() { window.print(); }
+      </script>
+    </html>
+  `;
+
+  win.document.write(html);
+  win.document.close();
+}
+
 
 /**
  * Calculate optimal column widths

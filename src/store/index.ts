@@ -549,6 +549,7 @@ interface AppState {
 
   // Return
   processReturn: (ret: Omit<ReturnRecord, 'id'>, options?: { skipNotifications?: boolean }) => Promise<void>;
+  deleteReturn: (id: string) => Promise<void>;
 
   // Users
   addUser: (user: Omit<User, 'id'>) => Promise<void>;
@@ -1884,6 +1885,44 @@ export const useStore = create<AppState>((set, get) => ({
 
       await batch.commit();
     }, 'system');
+  },
+
+  deleteReturn: async (id) => {
+    const ret = get().returns.find(r => r.id === id);
+    if (!ret) return;
+
+    const lockResource = `inventory_${ret.location_id}_${ret.item_id}`;
+    return transactionLockManager.executeWithLock(lockResource, async () => {
+      const batch = writeBatch(db);
+      
+      batch.delete(doc(db, 'returns', id));
+
+      if (ret.status === 'Restocked') {
+        const invId = `${ret.location_id}_${ret.item_id}`;
+        const existing = get().getInventoryAt(ret.location_id, ret.item_id);
+        if (existing) {
+          const newQty = Math.max(0, existing.quantity - ret.quantity);
+          batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({
+            ...existing,
+            quantity: newQty,
+            returned_balance: Math.max(0, (existing.returned_balance || 0) - ret.quantity)
+          }));
+        }
+      }
+
+      const relatedTx = get().transactions.find(t => 
+        t.type === 'return' && 
+        t.item_id === ret.item_id && 
+        t.to_location === ret.location_id &&
+        t.quantity === ret.quantity &&
+        Math.abs(new Date(t.timestamp).getTime() - new Date(ret.timestamp).getTime()) < 10000
+      );
+      if (relatedTx) {
+        batch.delete(doc(db, 'transactions', relatedTx.id));
+      }
+
+      await batch.commit();
+    });
   },
 
   // ── Users ──────────────────────────────────────────────────────────────────

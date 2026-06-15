@@ -367,7 +367,9 @@ export default function Dashboard() {
                         <p className="text-base font-black text-gray-900 tabular-nums tracking-tighter">
                           {formatHistoricalDualCurrency(tx.unit_cost * tx.quantity, tx.currency, tx.converted_value_USD)}
                         </p>
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">{format(new Date(tx.timestamp), 'HH:mm • MMM dd')}</p>
+                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">
+                          BY: {tx.performed_by || 'SYSTEM'} • {format(new Date(tx.timestamp), 'HH:mm • MMM dd')}
+                        </p>
                       </div>
                     </div>
                   );

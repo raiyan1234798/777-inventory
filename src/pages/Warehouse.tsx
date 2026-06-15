@@ -2751,31 +2751,31 @@ export default function Warehouse() {
                   </div>
                   <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-gray-100">
                     <button
-                      onClick={async () => {
-                        try {
-                          const { exportFixStocksReport } = await import('../lib/bulkOperations');
-                          const locName = locations.find(l => l.id === viewItemsSession.location_id)?.name ?? viewItemsSession.location_id;
-                          await exportFixStocksReport({
-                            filename: `ViewItems_Report_${viewItemsSession.fileName.replace(/[^a-zA-Z0-9]/g, '_')}`,
-                            items: viewItemsSession.items.map(it => ({
-                              ...it,
-                              originalReceivedQty: it.invoiceQty,
-                              newReceivedQty: it.receivedQty
-                            })),
-                            adjustedOnly: false,
-                            sessionMeta: {
-                              fileName: viewItemsSession.fileName,
-                              locationName: locName,
-                              importDate: new Date(viewItemsSession.date).toLocaleString('en-IN')
-                            }
-                          });
-                        } catch (e: any) {
-                          alert('Export failed: ' + e.message);
-                        }
-                      }}
-                      className="btn-secondary flex items-center gap-2"
-                    >
-                      <Printer className="w-4 h-4" /> Download PDF
+                        onClick={async () => {
+                          try {
+                            const { printFixStocksPDF } = await import('../lib/bulkOperations');
+                            const locName = locations.find(l => l.id === viewItemsSession.location_id)?.name ?? viewItemsSession.location_id;
+                            await printFixStocksPDF({
+                              filename: `ViewItems_Report_${viewItemsSession.fileName.replace(/[^a-zA-Z0-9]/g, '_')}`,
+                              items: viewItemsSession.items.map(it => ({
+                                ...it,
+                                originalReceivedQty: it.invoiceQty,
+                                newReceivedQty: it.receivedQty
+                              })),
+                              adjustedOnly: false,
+                              sessionMeta: {
+                                fileName: viewItemsSession.fileName,
+                                locationName: locName,
+                                importDate: new Date(viewItemsSession.date).toLocaleString('en-IN')
+                              }
+                            });
+                          } catch (e: any) {
+                            alert('Export failed: ' + e.message);
+                          }
+                        }}
+                        className="btn-secondary flex items-center gap-2"
+                      >
+                        <Printer className="w-4 h-4" /> Download PDF
                     </button>
                     <button onClick={() => setViewItemsSession(null)} className="btn-secondary">Close</button>
                   </div>

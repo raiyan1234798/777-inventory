@@ -122,7 +122,7 @@ export const initAuth = () => {
       if (!snap.empty) {
         // Existing Firestore record
         const data = snap.docs[0].data() as AppUser;
-        appUser = { ...data };
+        appUser = { id: snap.docs[0].id, ...data };
 
         // Super admins always have the correct role + Active status
         if (superAdminRole) {

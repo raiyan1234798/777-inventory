@@ -48,7 +48,8 @@ export default function GlobalReturnModal() {
         reason: returnFormState.notes,
         status: returnActionState as any,
         timestamp: new Date().toISOString(),
-        image_proof: returnFormState.image_proof
+        image_proof: returnFormState.image_proof,
+        performed_by: appUser?.name || 'Unknown'
       });
 
       setReturnModalOpen(false);

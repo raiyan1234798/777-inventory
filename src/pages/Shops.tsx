@@ -346,7 +346,10 @@ export default function Shops() {
                       </p>
                     </div>
                   </div>
-                  <p className="text-[10px] text-gray-300 font-bold uppercase tracking-tighter tabular-nums">{format(new Date(sale.timestamp), 'MMM dd, HH:mm')}</p>
+                  <div className="flex justify-between items-center mt-1">
+                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">BY: {sale.sold_by || 'System'}</p>
+                    <p className="text-[10px] text-gray-300 font-bold uppercase tracking-tighter tabular-nums">{format(new Date(sale.timestamp), 'MMM dd, HH:mm')}</p>
+                  </div>
                 </div>
               ))
             )}

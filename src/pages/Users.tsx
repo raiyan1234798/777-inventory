@@ -105,7 +105,11 @@ export default function Users() {
 
   const handleDelete = async (user: User) => {
     if (!window.confirm(`Remove user "${user.name}"? This cannot be undone.`)) return;
-    await deleteUser(user.id);
+    try {
+      await deleteUser(user.id);
+    } catch (err: any) {
+      alert(`Failed to delete user: ${err.message}`);
+    }
   };
 
   const roleCount = (role: Role) => users.filter(u => u.role === role).length;
