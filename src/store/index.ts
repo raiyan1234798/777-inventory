@@ -118,6 +118,7 @@ export interface ReturnRecord {
   timestamp: string;
   ref_transaction_id?: string;
   image_proof?: string;
+  performed_by?: string;
 }
 
 export interface AppNotification {
@@ -173,6 +174,7 @@ export interface ImportSession {
   items: ImportSessionItem[];
   status: 'confirmed';     // only confirmed imports are stored
   container_id?: string;
+  performed_by?: string;
 }
 
 
@@ -500,6 +502,7 @@ interface AppState {
   updateLocation: (id: string, loc: Partial<Location>) => Promise<void>;
   deleteLocation: (id: string) => Promise<void>;
   addBrand: (brand: Omit<Brand, 'id'>) => Promise<string>;
+  updateBrand: (id: string, updates: Partial<Brand>) => Promise<void>;
   deleteBrand: (id: string) => Promise<void>;
   addItem: (item: Omit<Item, 'id'>) => Promise<void>;
   updateItem: (id: string, updates: Partial<Item>) => Promise<void>;
@@ -1360,7 +1363,11 @@ export const useStore = create<AppState>((set, get) => ({
     const ref = doc(collection(db, 'brands'));
     await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...brand }));
     return ref.id;
+  },  updateBrand: async (id: string, updates: Partial<Brand>) => {
+    const bRef = doc(db, 'brands', id);
+    await updateDoc(bRef, updates);
   },
+
   deleteBrand: async (id: string) => {
     return get().deleteBrands([id]);
   },

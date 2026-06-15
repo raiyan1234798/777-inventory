@@ -150,6 +150,7 @@ export default function Warehouse() {
   const [itemForm, setItemForm] = useState({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 0, avg_cost_USD: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' });
   const [avgCostCurrency, setAvgCostCurrency] = useState<'USD' | 'ZMW'>('USD');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
   const [isManualBrand, setIsManualBrand] = useState(false);
 
   const [transferForm, setTransferForm] = useState({
@@ -592,8 +593,18 @@ export default function Warehouse() {
 
   const handleAddBrand = async (e: React.FormEvent) => {
     e.preventDefault(); setSaving(true);
-    try { await addBrand(brandForm); setBrandModal(false); setBrandForm({ name: '', origin_country: 'Zambia' }); }
-    finally { setSaving(false); }
+    try { 
+      if (editingBrandId) {
+        await updateBrand(editingBrandId, brandForm);
+      } else {
+        await addBrand(brandForm); 
+      }
+      setBrandModal(false); 
+      setEditingBrandId(null);
+      setBrandForm({ name: '', origin_country: 'Zambia' }); 
+    } catch (err: any) {
+      alert("Failed to save brand: " + err.message);
+    } finally { setSaving(false); }
   };
 
   const handleAddItem = async (e: React.FormEvent) => {
@@ -794,6 +805,7 @@ export default function Warehouse() {
         items: sessionItems,
         status: 'confirmed',
         container_id: containerId,
+        performed_by: appUser?.name || 'Unknown',
       });
 
       setOnboardModal(false);
@@ -918,6 +930,7 @@ export default function Warehouse() {
         items: sessionItems,
         status: 'confirmed',
         container_id: 'manual_entry',
+        performed_by: appUser?.name || 'Unknown',
       });
 
       setAddStockModal(false);
@@ -2158,9 +2171,6 @@ export default function Warehouse() {
                     }}
                     className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white font-medium"
                   >
-                    {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
-                  </select>
-                </div>
                 {Math.ceil(filteredItems.length / pageSize) > 1 && (
                   <div className="flex items-center gap-1">
                     <button type="button" title="Previous page" disabled={itemsPage === 1} onClick={() => setItemsPage(p => p - 1)} className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
@@ -2176,13 +2186,22 @@ export default function Warehouse() {
         {/* ── Brands Tab ── */}
         {activeTab === 'brands' && (
           <div>
-            <div className="p-4 flex flex-col sm:flex-row gap-3 justify-between border-b border-gray-50">
+            <div className="p-4 sm:p-5 flex flex-col sm:flex-row gap-3 justify-between border-b border-gray-50">
               <div className="relative flex-1 max-w-md">
                 <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <input value={brandsSearch} onChange={e => { setBrandsSearch(e.target.value); setBrandsPage(1); }}
-                  placeholder="Search brands..." className="input-field pl-10 h-10 text-sm" />
+                  placeholder="Search brands..." className="input-field pl-10 h-11 text-sm" />
               </div>
-              <button onClick={() => setBrandModal(true)} className="btn-primary flex items-center gap-2 text-sm h-10"><Plus className="w-4 h-4" /> Add Brand</button>
+              <button onClick={() => { setEditingBrandId(null); setBrandForm({ name: '', origin_country: 'Zambia' }); setBrandModal(true); }} className="btn-primary flex items-center gap-2 text-sm h-11"><Plus className="w-4 h-4" /> Add Brand</button>
+              {selectedBrandIds.size > 0 && (
+                <button
+                  onClick={handleBulkDelete}
+                  className="btn-secondary text-red-600 border-red-100 bg-red-50 hover:bg-red-100 flex items-center gap-2 h-11 px-6 animate-in fade-in zoom-in duration-200"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete ({selectedBrandIds.size})
+                </button>
+              )}
             </div>
 
             {/* Desktop Table View */}
@@ -2190,6 +2209,9 @@ export default function Warehouse() {
               <table className="w-full text-sm text-left">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                   <tr>
+                    <th className="px-5 py-3 w-12">
+                      <input type="checkbox" className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer" checked={paginatedBrands.length > 0 && paginatedBrands.every(b => selectedBrandIds.has(b.id))} onChange={toggleBrandAll} />
+                    </th>
                     <th className="px-5 py-3 font-medium">Brand Name</th>
                     <th className="px-5 py-3 font-medium">Origin Country</th>
                     <th className="px-5 py-3 font-medium text-right">Items</th>
@@ -2198,20 +2220,26 @@ export default function Warehouse() {
                 </thead>
                 <tbody className="divide-y divide-gray-50 bg-white">
                   {paginatedBrands.length === 0 ? (
-                    <tr><td colSpan={4} className="px-5 py-12 text-center text-gray-400 text-sm">
+                    <tr><td colSpan={5} className="px-5 py-12 text-center text-gray-400 text-sm">
                       {brands.length === 0 ? 'No brands yet.' : 'No brands match your search.'}
                     </td></tr>
                   ) : paginatedBrands.map(b => {
                     const itemCount = items.filter(i => i.brand_id === b.id).length;
                     return (
-                      <tr key={b.id} className="hover:bg-gray-50/50 transition-colors">
+                      <tr key={b.id} className={clsx("hover:bg-gray-50/50 transition-colors", selectedBrandIds.has(b.id) && 'bg-primary/5')}>
+                        <td className="px-5 py-3.5">
+                          <input type="checkbox" className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer" checked={selectedBrandIds.has(b.id)} onChange={() => toggleSelect(selectedBrandIds, setSelectedBrandIds, b.id)} />
+                        </td>
                         <td className="px-5 py-3.5 font-medium text-gray-900">{b.name}</td>
                         <td className="px-5 py-3.5 text-gray-500">{b.origin_country}</td>
                         <td className="px-5 py-3.5 text-right">
                           <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">{itemCount}</span>
                         </td>
                         <td className="px-5 py-3.5 text-right">
-                          <button title="Delete Brand" onClick={() => deleteBrand(b.id)} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <div className="flex justify-end gap-1">
+                            <button title="Edit Brand" onClick={() => { setEditingBrandId(b.id); setBrandForm({ name: b.name, origin_country: b.origin_country }); setBrandModal(true); }} className="text-gray-400 hover:text-blue-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-blue-50"><Pencil className="w-3.5 h-3.5" /></button>
+                            <button title="Delete Brand" onClick={() => { setDeleteConfirmModal({ isOpen: true, isBulk: false, id: b.id, name: b.name, tab: 'brands' }); }} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -2228,16 +2256,26 @@ export default function Warehouse() {
                 </div>
               ) : (
                 <div className="space-y-3">
+                  <div className="flex items-center gap-2 px-1 mb-2">
+                    <input type="checkbox" className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer" checked={paginatedBrands.length > 0 && paginatedBrands.every(b => selectedBrandIds.has(b.id))} onChange={toggleBrandAll} />
+                    <span className="text-xs font-bold text-gray-500 uppercase">Select All</span>
+                  </div>
                   {paginatedBrands.map(b => {
                     const itemCount = items.filter(i => i.brand_id === b.id).length;
                     return (
-                      <div key={b.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
-                        <div className="flex justify-between items-start gap-2">
+                      <div key={b.id} className={clsx("bg-white rounded-xl border p-4 shadow-sm hover:shadow-md transition-all flex gap-3", selectedBrandIds.has(b.id) ? 'border-primary bg-primary/5' : 'border-gray-200')}>
+                        <div className="pt-0.5">
+                          <input type="checkbox" className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer" checked={selectedBrandIds.has(b.id)} onChange={() => toggleSelect(selectedBrandIds, setSelectedBrandIds, b.id)} />
+                        </div>
+                        <div className="flex-1 flex justify-between items-start gap-2">
                           <div>
                             <h3 className="font-bold text-gray-900 text-sm">{b.name}</h3>
                             <p className="text-xs text-gray-500 mt-1">Origin: {b.origin_country} · <span className="font-bold text-blue-600">{itemCount} items</span></p>
                           </div>
-                          <button title="Delete Brand" onClick={() => deleteBrand(b.id)} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
+                          <div className="flex flex-col gap-1">
+                            <button title="Edit Brand" onClick={() => { setEditingBrandId(b.id); setBrandForm({ name: b.name, origin_country: b.origin_country }); setBrandModal(true); }} className="text-gray-400 hover:text-blue-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-blue-50 flex-shrink-0"><Pencil className="w-4 h-4" /></button>
+                            <button title="Delete Brand" onClick={() => { setDeleteConfirmModal({ isOpen: true, isBulk: false, id: b.id, name: b.name, tab: 'brands' }); }} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -2524,6 +2562,8 @@ export default function Warehouse() {
                                 <span className="font-semibold text-indigo-600">{session.itemCount} SKUs</span>
                                 <span>·</span>
                                 <span className="font-semibold text-gray-600">{session.totalItems.toLocaleString()} units</span>
+                                <span>·</span>
+                                <span className="text-gray-500 uppercase tracking-widest text-[10px] font-bold">BY: {session.performed_by || 'System'}</span>
                               </div>
                               {/* Brand summary */}
                               <div className="flex flex-wrap gap-1 mt-2">
