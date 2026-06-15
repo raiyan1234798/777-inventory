@@ -1243,7 +1243,7 @@ export async function exportDailySalesReport777(data: {
   rows.push([]);
 
   // Table header
-  rows.push(['BRANDS', 'ITEM DESCRIPTION', 'NO. QTY SOLD', 'UNIT COST', 'ACTUAL SELLING PRICE PER UNIT', 'TOTAL SALES', 'NET PROFIT']);
+  rows.push(['BRANDS', 'ITEM DESCRIPTION', 'NO. QTY SOLD', 'UNIT COST', 'ACTUAL SELLING PRICE PER UNIT', 'TOTAL SALES', 'NET PROFIT', 'SOLD BY']);
 
   daySales.forEach(sale => {
     const item = items.find(i => i.id === sale.item_id);
@@ -1262,7 +1262,8 @@ export async function exportDailySalesReport777(data: {
       Number(costBase.toFixed(2)),
       Number(sellingPriceBase.toFixed(2)),
       Number(totalValBase.toFixed(2)),
-      Number(profitBase.toFixed(2))
+      Number(profitBase.toFixed(2)),
+      (sale.sold_by || 'System').toUpperCase()
     ]);
   });
 

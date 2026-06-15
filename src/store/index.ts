@@ -1884,6 +1884,15 @@ export const useStore = create<AppState>((set, get) => ({
       });
 
       await batch.commit();
+
+      if (!options?.skipNotifications) {
+        await get().createNotification({
+          type: 'return_alert',
+          location_id: ret.location_id,
+          message: `🔄 Item Returned: ${ret.quantity} units of ${ret.item_name} returned at ${get().locations.find(l => l.id === ret.location_id)?.name} by ${ret.performed_by || 'System'}.`,
+          target_roles: ['super_admin', 'admin', 'warehouse_staff', 'shop_staff']
+        });
+      }
     }, 'system');
   },
 

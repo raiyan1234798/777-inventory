@@ -775,7 +775,7 @@ export default function Warehouse() {
       await createNotification({
         type: 'stock_entry',
         location_id: onboardForm.location_id,
-        message: `📦 Stock Onboarded: ${totalItems} units across ${onboardForm.rows.length} items (${summary}) added to ${locName}.`,
+        message: `📦 Stock Onboarded: ${totalItems} units across ${onboardForm.rows.length} items (${summary}) added to ${locName} by ${appUser?.name ?? 'Admin'}.`,
         target_roles: ['super_admin', 'admin', 'warehouse_staff']
       });
 

@@ -248,6 +248,7 @@ export default function Reports() {
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Total</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Net Profit</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Shop</th>
+                  <th className="px-4 py-3 text-left font-bold text-gray-600">Sold By</th>
                   <th className="px-4 py-3 text-left font-bold text-gray-600">Date</th>
                 </tr>
               </thead>
@@ -270,6 +271,7 @@ export default function Reports() {
                       <td className="px-4 py-3 font-bold text-gray-900">{formatCurrency(sale.converted_price_USD || 0)}</td>
                       <td className="px-4 py-3 font-semibold text-emerald-600">{formatCurrency(sale.profit_USD || 0)}</td>
                       <td className="px-4 py-3 text-gray-600">{location?.name}</td>
+                      <td className="px-4 py-3 text-gray-600">{sale.sold_by || 'System'}</td>
                       <td className="px-4 py-3 text-gray-600">
                         {sale.timestamp ? new Date(sale.timestamp).toLocaleDateString('en-IN') : '—'}
                       </td>

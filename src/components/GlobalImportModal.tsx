@@ -119,15 +119,19 @@ export default function GlobalImportModal() {
       if (rowStr.includes('BRAND') || rowStr.includes('FORGE BRAND') || rowStr.includes('HORSE BRAND')) {
         const parts = rowStr.split(/[:–-]/).map(s => s.trim());
         if (parts.length >= 2) brandName = parts[parts.length - 1].replace(/BRAND/gi, '').trim() || brandName;
+        else if (parts.length === 1) brandName = parts[0].replace(/BRAND/gi, '').trim() || brandName;
       }
       // Also check for standalone brand name between company header and table
       if (i >= 1 && i <= 3 && !rowStr.includes('INVESTMENTS') && !rowStr.includes('DATE') && !rowStr.includes('SL') && !rowStr.includes('STOCK')) {
         const cleaned = (rows[i] || []).map(c => String(c || '').trim()).filter(Boolean);
         if (cleaned.length === 1 && cleaned[0].length > 2 && cleaned[0].length < 40 && isNaN(Number(cleaned[0]))) {
-          brandName = cleaned[0];
+          brandName = cleaned[0].replace(/BRAND/gi, '').trim();
         }
       }
     }
+    
+    // Ensure "BRAND" is fully stripped from the final result just in case
+    brandName = brandName.replace(/BRAND/gi, '').trim();
 
     // Find header row with column names
     let headerIdx = -1;
