@@ -217,17 +217,18 @@ export default function GlobalImportModal() {
         qty = opening + received - supplied + returned;
       }
 
-      // Check for swapped columns where "CODE #" actually contains the item name and "ITEM DESCRIPTION" contains the brand/category
+      // Check for swapped columns where "CODE #" actually contains the item name and "ITEM DESCRIPTION" contains the brand/category/sku
       const isSwapped = codeHeader.includes('CODE') && !codeHeader.includes('SKU') && codeRaw.length > itemNameRaw.length && codeRaw.includes(' ');
       
       let finalBrandName = brandName;
       if (isSwapped) {
-        finalBrandName = brandName ? `${brandName.trim()} ${itemNameRaw.trim()}` : itemNameRaw.trim();
+        // The item name is actually in the code column
         itemName = codeRaw;
-        code = ''; // Ignore the fake code
+        // The category/SKU is actually in the item name column
+        code = itemNameRaw.trim();
       } else if (brandName && itemNameRaw && itemNameRaw.length <= 15 && !itemNameRaw.includes(' ')) {
         // Just in case it's a category but the code wasn't swapped or code was empty
-        finalBrandName = `${brandName.trim()} ${itemNameRaw.trim()}`;
+        code = itemNameRaw.trim();
       }
 
       // Check if this brand item already exists and has an SKU assigned
@@ -733,6 +734,7 @@ export default function GlobalImportModal() {
         items: sessionItems,
         status: 'confirmed',
         container_id: containerId,
+        performed_by: useAuthStore.getState().appUser?.name ?? useAuthStore.getState().user?.displayName ?? 'Unknown',
       });
       // ──────────────────────────────────────────────────────────────────────
 
