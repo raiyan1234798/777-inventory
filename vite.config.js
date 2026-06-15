@@ -1,11 +1,11 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import { resolve } from 'path'
-import os from 'os'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
+import os from 'os';
 
 export default defineConfig({
   plugins: [react()],
-  // Use system temp dir for vite cache/temp files to avoid node_modules write restriction
+  // Use system temp dir to avoid node_modules write restriction (Cloudflare / sandbox)
   cacheDir: resolve(os.tmpdir(), 'vite-777-cache'),
   build: {
     chunkSizeWarningLimit: 1000,
@@ -37,4 +37,4 @@ export default defineConfig({
   optimizeDeps: {
     include: ['react', 'react-dom', 'firebase/app', 'firebase/firestore'],
   },
-})
+});

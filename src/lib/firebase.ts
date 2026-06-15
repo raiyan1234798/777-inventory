@@ -1,10 +1,13 @@
 import { initializeApp } from 'firebase/app';
-import { getAnalytics } from 'firebase/analytics';
 import { getFirestore } from 'firebase/firestore';
-import { 
-  getAuth, GoogleAuthProvider, 
-  signInWithPopup, signInWithRedirect, getRedirectResult,
-  signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut 
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signOut,
 } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -17,12 +20,20 @@ const firebaseConfig = {
   measurementId: "G-NN01FJM2QY"
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
-export const analytics = typeof window !== "undefined" ? getAnalytics(app) : null;
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('profile');
+googleProvider.addScope('email');
+// Force account picker every time so users can switch accounts cleanly
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-export { signInWithPopup, signInWithRedirect, getRedirectResult, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut };
-
+export {
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signOut,
+};

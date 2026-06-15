@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Plus, Pencil, Trash2, ShieldCheck, AlertTriangle, User as UserIcon, Mail, MapPin, Search } from 'lucide-react';
 import Modal from '../components/Modal';
-import { useStore } from '../store';
-import type { User } from '../store';
+import { useStore, ROLE_DEFAULT_PERMISSIONS } from '../store';
+import type { User, Permission } from '../store';
 import { useAuthStore } from '../store/authStore';
 import clsx from 'clsx';
 
@@ -22,12 +22,24 @@ const ROLE_COLORS: Record<Role, string> = {
   shop_staff: 'bg-emerald-50 text-emerald-600 border-emerald-100',
 };
 
+const AVAILABLE_PERMISSIONS: { id: Permission; label: string }[] = [
+  { id: 'view_dashboard', label: 'View Dashboard' },
+  { id: 'manage_users', label: 'Manage Users' },
+  { id: 'manage_warehouses', label: 'Manage Warehouses' },
+  { id: 'manage_shops', label: 'Manage Shops' },
+  { id: 'view_finance', label: 'View Finance & Profits' },
+  { id: 'record_sales', label: 'Record Sales' },
+  { id: 'manage_transfers', label: 'Manage Transfers' },
+  { id: 'view_reports', label: 'View Reports' },
+];
+
 const emptyForm = (): Omit<User, 'id'> => ({
   name: '',
   email: '',
   role: 'shop_staff',
   location_id: '',
   status: 'Active',
+  permissions: [...ROLE_DEFAULT_PERMISSIONS['shop_staff']],
 });
 
 export default function Users() {
@@ -59,7 +71,14 @@ export default function Users() {
 
   const openEdit = (user: User) => {
     setEditingId(user.id);
-    setForm({ name: user.name, email: user.email, role: user.role, location_id: user.location_id, status: user.status });
+    setForm({ 
+      name: user.name, 
+      email: user.email, 
+      role: user.role, 
+      location_id: user.location_id, 
+      status: user.status,
+      permissions: [...(user.permissions || ROLE_DEFAULT_PERMISSIONS[user.role] || [])]
+    });
     setError('');
     setIsModalOpen(true);
   };
@@ -259,7 +278,10 @@ export default function Users() {
             </div>
             <div>
               <label className="label">Access Privilege</label>
-              <select title="Role" className="input-field h-12 bg-white font-bold" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as Role }))}>
+              <select title="Role" className="input-field h-12 bg-white font-bold" value={form.role} onChange={e => {
+                const newRole = e.target.value as Role;
+                setForm(f => ({ ...f, role: newRole, permissions: [...(ROLE_DEFAULT_PERMISSIONS[newRole] || [])] }));
+              }}>
                 {(Object.keys(ROLE_LABELS) as Role[]).map(role => (
                   <option key={role} value={role}>{ROLE_LABELS[role]}</option>
                 ))}
@@ -279,6 +301,38 @@ export default function Users() {
                 <option value="">Global Authority / All Shops</option>
                 {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
               </select>
+            </div>
+
+            {/* Custom Permissions */}
+            <div className="md:col-span-2 pt-4 border-t border-gray-100">
+              <label className="label mb-3">Granular Access Privileges</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {AVAILABLE_PERMISSIONS.map(p => {
+                  const isChecked = form.permissions?.includes(p.id);
+                  return (
+                    <label key={p.id} className={clsx(
+                      "flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all",
+                      isChecked ? "bg-primary/5 border-primary/20 text-primary" : "bg-gray-50 border-transparent text-gray-600 hover:bg-gray-100"
+                    )}>
+                      <input 
+                        type="checkbox" 
+                        className="w-4 h-4 rounded text-primary focus:ring-primary/20"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setForm(f => ({
+                            ...f,
+                            permissions: checked 
+                              ? [...(f.permissions || []), p.id]
+                              : (f.permissions || []).filter(id => id !== p.id)
+                          }));
+                        }}
+                      />
+                      <span className="text-xs font-bold tracking-tight">{p.label}</span>
+                    </label>
+                  )
+                })}
+              </div>
             </div>
           </div>
 

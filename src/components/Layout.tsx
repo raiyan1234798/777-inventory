@@ -20,30 +20,31 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '../store/authStore';
-import { useStore } from '../store';
+import { useStore, hasPermission } from '../store';
+import type { Permission, User } from '../store';
 import GlobalTransferModal from './GlobalTransferModal';
 import GlobalRecordSaleModal from './GlobalRecordSaleModal';
 import GlobalReturnModal from './GlobalReturnModal';
 import GlobalImportModal from './GlobalImportModal';
 import { auth } from '../lib/firebase';
 
-const navItems = [
-  { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, group: 'CORE' },
-  { name: 'Analytics', path: '/insights', icon: Zap, group: 'ANALYTICS' },
+const navItems: { name: string, path: string, icon: any, group: string, permission: Permission }[] = [
+  { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, group: 'CORE', permission: 'view_dashboard' },
+  { name: 'Analytics', path: '/insights', icon: Zap, group: 'ANALYTICS', permission: 'view_reports' },
 
-  { name: 'Warehouse Mgmt', path: '/warehouse', icon: Warehouse, group: 'OPERATIONS' },
-  { name: 'Manage Warehouses', path: '/manage-warehouses', icon: Building2, group: 'OPERATIONS' },
+  { name: 'Warehouse Mgmt', path: '/warehouse', icon: Warehouse, group: 'OPERATIONS', permission: 'manage_warehouses' },
+  { name: 'Manage Warehouses', path: '/manage-warehouses', icon: Building2, group: 'OPERATIONS', permission: 'manage_warehouses' },
   
-  { name: 'Stock Transfer', path: '/transfers', icon: ArrowRightLeft, group: 'OPERATIONS' },
-  { name: 'Returns handling', path: '/returns', icon: Undo2, group: 'OPERATIONS' },
-  { name: 'Stock Reports', path: '/stock-reports', icon: BarChart2, group: 'OPERATIONS' },
+  { name: 'Stock Transfer', path: '/transfers', icon: ArrowRightLeft, group: 'OPERATIONS', permission: 'manage_transfers' },
+  { name: 'Returns handling', path: '/returns', icon: Undo2, group: 'OPERATIONS', permission: 'manage_warehouses' },
+  { name: 'Stock Reports', path: '/stock-reports', icon: BarChart2, group: 'OPERATIONS', permission: 'view_reports' },
 
-  { name: 'Sales & Shops', path: '/shops', icon: Store, group: 'FINANCE' },
-  { name: 'Finance Hub', path: '/finance', icon: PieChart, group: 'FINANCE' },
-  { name: 'Reports Archive', path: '/reports', icon: FileText, group: 'FINANCE' },
+  { name: 'Sales & Shops', path: '/shops', icon: Store, group: 'FINANCE', permission: 'manage_shops' },
+  { name: 'Finance Hub', path: '/finance', icon: PieChart, group: 'FINANCE', permission: 'view_finance' },
+  { name: 'Reports Archive', path: '/reports', icon: FileText, group: 'FINANCE', permission: 'view_reports' },
 
-  { name: 'Manage Shops', path: '/manage-shops', icon: Globe, group: 'ADMIN' },
-  { name: 'Control Users', path: '/users', icon: Users, group: 'ADMIN' },
+  { name: 'Manage Shops', path: '/manage-shops', icon: Globe, group: 'ADMIN', permission: 'manage_shops' },
+  { name: 'Control Users', path: '/users', icon: Users, group: 'ADMIN', permission: 'manage_users' },
 ];
 
 export default function Layout() {
@@ -105,9 +106,10 @@ export default function Layout() {
         {/* Nav */}
         <nav className="flex-1 py-5 px-3 space-y-4 overflow-y-auto">
           {(() => {
+             const permittedNavItems = navItems.filter(item => hasPermission(appUser as User, item.permission));
              const groups = ['CORE', 'ANALYTICS', 'OPERATIONS', 'FINANCE', 'ADMIN'];
              return groups.map(group => {
-               const itemsInGroup = navItems.filter(i => (i as any).group === group);
+               const itemsInGroup = permittedNavItems.filter(i => i.group === group);
                if (itemsInGroup.length === 0) return null;
                return (
                  <div key={group} className="space-y-1">

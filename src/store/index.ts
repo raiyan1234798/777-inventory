@@ -197,6 +197,16 @@ export interface TransferSession {
   status: 'Completed' | 'Reconciled';
 }
 
+export type Permission = 
+  | 'view_dashboard'
+  | 'manage_users'
+  | 'manage_warehouses'
+  | 'manage_shops'
+  | 'view_finance'
+  | 'record_sales'
+  | 'manage_transfers'
+  | 'view_reports';
+
 export interface User {
   id: string;
   name: string;
@@ -204,7 +214,25 @@ export interface User {
   role: 'super_admin' | 'admin' | 'warehouse_staff' | 'shop_staff';
   location_id: string;
   status: 'Active' | 'Inactive' | 'Pending';
+  permissions?: Permission[];
 }
+
+export const ROLE_DEFAULT_PERMISSIONS: Record<User['role'], Permission[]> = {
+  super_admin: ['view_dashboard', 'manage_users', 'manage_warehouses', 'manage_shops', 'view_finance', 'record_sales', 'manage_transfers', 'view_reports'],
+  admin: ['view_dashboard', 'manage_users', 'manage_warehouses', 'manage_shops', 'view_finance', 'record_sales', 'manage_transfers', 'view_reports'],
+  warehouse_staff: ['view_dashboard', 'manage_warehouses', 'manage_transfers'],
+  shop_staff: ['view_dashboard', 'record_sales'],
+};
+
+export const hasPermission = (user: User | null, permission: Permission): boolean => {
+  if (!user) return false;
+  if (user.role === 'super_admin') return true; // Super admin always has all permissions
+  if (user.permissions) {
+    return user.permissions.includes(permission);
+  }
+  // Fallback to default role permissions
+  return ROLE_DEFAULT_PERMISSIONS[user.role]?.includes(permission) ?? false;
+};
 
 // ─── Exchange Rates (Dynamic, loaded from Firebase) ────────────────────────
 export const EXCHANGE_RATES: Record<string, number> = { ...DEFAULT_EXCHANGE_RATES };
