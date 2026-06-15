@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { auth, db } from '../lib/firebase';
-import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
+import { onAuthStateChanged, getRedirectResult, type User as FirebaseUser } from 'firebase/auth';
 import {
   collection, query, where, getDocs,
   setDoc, doc, onSnapshot, updateDoc
@@ -77,6 +77,11 @@ export const initAuth = () => {
     if (unsubscribeSnapshot) { unsubscribeSnapshot(); unsubscribeSnapshot = null; }
     if (tokenRefreshTimer)    { clearInterval(tokenRefreshTimer); tokenRefreshTimer = null; }
   };
+
+  // Resolve any pending redirect results (fixes stuck "VERIFYING IDENTITY" loader)
+  getRedirectResult(auth).catch((err) => {
+    console.warn('[AuthStore] Redirect result error:', err);
+  });
 
   onAuthStateChanged(auth, async (firebaseUser) => {
     // Clean up previous listeners / timers on every auth state change

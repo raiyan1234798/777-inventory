@@ -210,7 +210,7 @@ export default function Users() {
                   <td className="px-6 py-5">
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center text-primary font-black text-sm flex-shrink-0 transition-transform group-hover:scale-110">
-                        {user.name.charAt(0).toUpperCase()}
+                        {(user.name || '?').charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0">
                         <p className="text-base font-extrabold text-gray-900 group-hover:text-primary transition-colors tracking-tight truncate">{user.name}</p>
