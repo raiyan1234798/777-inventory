@@ -613,9 +613,15 @@ export default function Warehouse() {
     try {
       let finalBrandId = itemForm.brand_id;
 
-      // Handle manual brand creation if requested
+      // Handle manual brand creation or resolution if requested
       if (isManualBrand && itemForm.brand_manual) {
-        finalBrandId = await addBrand({ name: itemForm.brand_manual, origin_country: 'Zambia' });
+        const manualName = itemForm.brand_manual.trim();
+        const existingBrand = brands.find(b => b.name.toLowerCase() === manualName.toLowerCase());
+        if (existingBrand) {
+          finalBrandId = existingBrand.id;
+        } else {
+          finalBrandId = await addBrand({ name: manualName, origin_country: 'Zambia' });
+        }
       }
 
       // Auto-generate brand-based SKU if empty
@@ -3506,7 +3512,7 @@ export default function Warehouse() {
               <input required className="input-field" placeholder="e.g. ZRA-001" value={itemForm.sku} onChange={e => setItemForm(f => ({ ...f, sku: e.target.value }))} />
             </div>
             <div>
-              <label className="label">Brand</label>
+              <label className="label">Category</label>
               <input required className="input-field" placeholder="e.g. Apparel" value={itemForm.category} onChange={e => setItemForm(f => ({ ...f, category: e.target.value }))} />
             </div>
             <div>
