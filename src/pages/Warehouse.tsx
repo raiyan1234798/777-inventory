@@ -260,8 +260,8 @@ export default function Warehouse() {
         const isOut = entry.quantity === 0;
         const isLow = !isOut && entry.quantity < minLimit;
         const stockPct = minLimit > 0 ? Math.min((entry.quantity / minLimit) * 100, 200) : 100;
-        const profitMargin = item.retail_price && entry.avg_cost_USD
-          ? ((item.retail_price - entry.avg_cost_USD) / item.retail_price) * 100
+        const profitMargin = item.retail_price && item.avg_cost_USD
+          ? ((item.retail_price - item.avg_cost_USD) / item.retail_price) * 100
           : 0;
         return { ...entry, item, loc, brand, isLow, isOut, stockPct, profitMargin };
       })
@@ -301,7 +301,7 @@ export default function Warehouse() {
         const g = grouped.get(r.item_id)!;
         const totalQty = g.quantity + r.quantity;
         if (totalQty > 0) {
-          g.avg_cost_USD = ((g.avg_cost_USD * g.quantity) + (r.avg_cost_USD * r.quantity)) / totalQty;
+          g.avg_cost_USD = r.item.avg_cost_USD;
         }
         g.quantity = totalQty;
         g.opening_balance += r.opening_balance || 0;
@@ -317,8 +317,8 @@ export default function Warehouse() {
         r.isOut = r.quantity === 0;
         r.isLow = !r.isOut && r.quantity < minLimit;
         r.stockPct = minLimit > 0 ? Math.min((r.quantity / minLimit) * 100, 200) : 100;
-        r.profitMargin = r.item.retail_price && r.avg_cost_USD
-          ? ((r.item.retail_price - r.avg_cost_USD) / r.item.retail_price) * 100
+        r.profitMargin = r.item.retail_price && r.item.avg_cost_USD
+          ? ((r.item.retail_price - r.item.avg_cost_USD) / r.item.retail_price) * 100
           : 0;
       }
     }
@@ -341,7 +341,7 @@ export default function Warehouse() {
         case 'category': cmp = a.item.category.localeCompare(b.item.category); break;
         case 'brand': cmp = (a.brand?.name || '').localeCompare(b.brand?.name || ''); break;
         case 'quantity': cmp = a.quantity - b.quantity; break;
-        case 'avg_cost': cmp = (a.avg_cost_USD || 0) - (b.avg_cost_USD || 0); break;
+        case 'avg_cost': cmp = (a.item.avg_cost_USD || 0) - (b.item.avg_cost_USD || 0); break;
         case 'retail_price': cmp = (a.item.retail_price || 0) - (b.item.retail_price || 0); break;
         case 'stock_health': cmp = a.stockPct - b.stockPct; break;
       }
@@ -511,7 +511,7 @@ export default function Warehouse() {
   };
 
   const totalItems = useMemo(() => inventoryRows.reduce((s, r) => s + (r.quantity || 0), 0), [inventoryRows]);
-  const totalValue = useMemo(() => inventoryRows.reduce((s, r) => s + (r.quantity || 0) * (r.avg_cost_USD || 0), 0), [inventoryRows]);
+  const totalValue = useMemo(() => inventoryRows.reduce((s, r) => s + (r.quantity || 0) * (r.item.avg_cost_USD || 0), 0), [inventoryRows]);
   const lowCount = useMemo(() => inventoryRows.filter(r => r.isLow).length, [inventoryRows]);
   const outCount = useMemo(() => inventoryRows.filter(r => r.isOut).length, [inventoryRows]);
   const healthyCount = useMemo(() => inventoryRows.filter(r => !r.isLow && !r.isOut).length, [inventoryRows]);
@@ -1584,7 +1584,7 @@ export default function Warehouse() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-semibold text-gray-900 tabular-nums">{r.quantity.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right text-gray-700 tabular-nums">{formatCurrency(r.avg_cost_USD)}</td>
+                      <td className="px-4 py-3 text-right text-gray-700 tabular-nums">{formatCurrency(r.item.avg_cost_USD)}</td>
                       <td className="px-4 py-3 text-right">
                         <p className="font-bold text-gray-900 tabular-nums">{formatCurrency(r.item.retail_price || 0)}</p>
                         {r.profitMargin > 0 && (
@@ -1727,7 +1727,7 @@ export default function Warehouse() {
                         </div>
                         <div className="bg-emerald-50 rounded-lg p-2.5 border border-emerald-100">
                           <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Unit Cost</p>
-                          <p className="text-[11px] font-bold text-emerald-900 mt-0.5">{formatCurrency(r.avg_cost_USD)}</p>
+                          <p className="text-[11px] font-bold text-emerald-900 mt-0.5">{formatCurrency(r.item.avg_cost_USD)}</p>
                         </div>
                         <div className="bg-purple-50 rounded-lg p-2.5 border border-purple-100">
                           <p className="text-[9px] uppercase font-bold text-purple-600 tracking-wider">Retail</p>

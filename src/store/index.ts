@@ -1408,8 +1408,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
   updateItem: async (id: string, updates: Partial<Item>) => {
     if (updates.sku) {
-      const exists = get().items.some(i => i.id !== id && i.sku.toLowerCase() === updates.sku!.toLowerCase());
-      if (exists) throw new Error(`An item with SKU "${updates.sku}" already exists.`);
+      const currentItem = get().items.find(i => i.id === id);
+      if (currentItem && currentItem.sku.toLowerCase() !== updates.sku.toLowerCase()) {
+        const exists = get().items.some(i => i.id !== id && i.sku.toLowerCase() === updates.sku!.toLowerCase());
+        if (exists) throw new Error(`An item with SKU "${updates.sku}" already exists.`);
+      }
     }
     await updateDoc(doc(db, 'items', id), sanitizeForFirestore(updates as Record<string, any>));
   },
