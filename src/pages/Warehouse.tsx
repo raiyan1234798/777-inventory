@@ -1473,7 +1473,7 @@ export default function Warehouse() {
                       <span className="flex items-center gap-1 justify-end">Qty <SortIcon field="quantity" /></span>
                     </th>
                     <th className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:text-gray-700 transition-colors" onClick={() => toggleSort('avg_cost')}>
-                      <span className="flex items-center gap-1 justify-end">Avg Cost <SortIcon field="avg_cost" /></span>
+                      <span className="flex items-center gap-1 justify-end">Unit Cost <SortIcon field="avg_cost" /></span>
                     </th>
                     <th className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:text-gray-700 transition-colors" onClick={() => toggleSort('retail_price')}>
                       <span className="flex items-center gap-1 justify-end">Retail <SortIcon field="retail_price" /></span>
@@ -1726,7 +1726,7 @@ export default function Warehouse() {
                           <p className="text-base font-extrabold text-blue-900 mt-0.5">{r.quantity}</p>
                         </div>
                         <div className="bg-emerald-50 rounded-lg p-2.5 border border-emerald-100">
-                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Avg Cost</p>
+                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Unit Cost</p>
                           <p className="text-[11px] font-bold text-emerald-900 mt-0.5">{formatCurrency(r.avg_cost_USD)}</p>
                         </div>
                         <div className="bg-purple-50 rounded-lg p-2.5 border border-purple-100">
@@ -3545,7 +3545,7 @@ export default function Warehouse() {
             )}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="label flex items-center gap-2 mb-0">Avg Cost <span className="text-[10px] font-semibold text-orange-600 bg-orange-50 px-2 py-0.5 rounded">Weighted</span></label>
+                <label className="label flex items-center gap-2 mb-0">Unit Cost <span className="text-[10px] font-semibold text-orange-600 bg-orange-50 px-2 py-0.5 rounded">Weighted</span></label>
                 <select 
                   className="text-xs bg-gray-50 border border-gray-200 rounded p-1 text-gray-700 font-medium"
                   value={avgCostCurrency}
