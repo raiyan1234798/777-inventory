@@ -11,12 +11,14 @@ import { db } from '../lib/firebase';
 import { collection, doc, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import Modal from '../components/Modal';
 import {
-  useStore, COUNTRIES, CURRENCIES, toUSD, fromUSD, formatCurrency, formatDualCurrency, formatHistoricalDualCurrency,
+  useStore, COUNTRIES, CURRENCIES, toUSD, fromUSD, formatCurrency, formatInCurrency, formatDualCurrency, formatHistoricalDualCurrency,
   type Location, type Brand, type Item, type InventoryEntry, type ImportSession
 } from '../store';
 import { useAuthStore } from '../store/authStore';
 import { exportInventorySystemData, exportInventoryToLedger, exportStockReport } from '../lib/bulkOperations';
 import { generateBrandSKU, canonicalSKU } from '../lib/skuGenerator';
+import { sortStockDistribution, sortLocationBreakdown } from '../lib/stockDistribution';
+import { matchesItemSearch } from '../lib/searchUtils';
 
 type ActiveTab = 'inventory' | 'containers' | 'brands' | 'items' | 'locations' | 'settings' | 'imports';
 type SortField = 'name' | 'location' | 'category' | 'brand' | 'quantity' | 'avg_cost' | 'retail_price' | 'stock_health';
@@ -149,6 +151,10 @@ export default function Warehouse() {
   const [brandForm, setBrandForm] = useState({ name: '', origin_country: 'Zambia' });
   const [itemForm, setItemForm] = useState({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 0, avg_cost_USD: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' });
   const [avgCostCurrency, setAvgCostCurrency] = useState<'USD' | 'ZMW'>('USD');
+  // Independent display-currency selectors for the inventory table columns.
+  // Defaults: Unit Cost in USD ($), Retail in ZMW (Kwacha).
+  const [costDisplayCurrency, setCostDisplayCurrency] = useState<string>('USD');
+  const [retailDisplayCurrency, setRetailDisplayCurrency] = useState<string>('ZMW');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
   const [isManualBrand, setIsManualBrand] = useState(false);
@@ -216,7 +222,7 @@ export default function Warehouse() {
         .reduce((sum, e) => sum + e.quantity, 0);
       return { ...loc, qty };
     }).filter(d => d.qty > 0);
-    return { item, distributions };
+    return { item, distributions: sortStockDistribution(distributions) };
   }, [drillDownItemId, inventory, items, locations]);
 
   const [onboardForm, setOnboardForm] = useState({
@@ -270,12 +276,10 @@ export default function Warehouse() {
 
   const inventoryRows = useMemo((): RowType[] => {
     let rows = allInventoryRows.filter(r => {
-      const q = search.toLowerCase();
-      const matchSearch = !q || r.item.name.toLowerCase().includes(q) ||
-        r.item.sku.toLowerCase().includes(q) ||
-        r.item.category.toLowerCase().includes(q) ||
-        r.loc.name.toLowerCase().includes(q) ||
-        (r.brand?.name.toLowerCase().includes(q));
+      const matchSearch = matchesItemSearch(
+        [r.item.name, r.item.sku, r.brand?.name, r.item.category, r.loc.name],
+        search
+      );
       const matchLocation = !filterLocation || r.location_id === filterLocation;
       const matchCategory = !filterCategory || r.item.category === filterCategory;
       const matchBrand = !filterBrand || r.item.brand_id === filterBrand;
@@ -533,10 +537,11 @@ export default function Warehouse() {
   const [itemsSearch, setItemsSearch] = useState('');
   const filteredItems = useMemo(() => {
     if (!itemsSearch) return items;
-    const q = itemsSearch.toLowerCase();
     return items.filter(i =>
-      i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) ||
-      i.category.toLowerCase().includes(q) || (brandMap.get(i.brand_id)?.name.toLowerCase().includes(q))
+      matchesItemSearch(
+        [i.name, i.sku, i.category, brandMap.get(i.brand_id)?.name],
+        itemsSearch
+      )
     );
   }, [items, itemsSearch, brandMap]);
 
@@ -576,13 +581,15 @@ export default function Warehouse() {
 
   // Get location breakdown for an item
   const getItemLocations = (itemId: string) => {
-    return inventory
-      .filter(e => e.item_id === itemId)
-      .map(e => {
-        const loc = locations.find(l => l.id === e.location_id);
-        return { location: loc?.name, type: loc?.type, quantity: e.quantity };
-      })
-      .filter(l => l.location);
+    return sortLocationBreakdown(
+      inventory
+        .filter(e => e.item_id === itemId)
+        .map(e => {
+          const loc = locations.find(l => l.id === e.location_id);
+          return { location: loc?.name, type: loc?.type, quantity: e.quantity };
+        })
+        .filter(l => l.location)
+    );
   };
 
   const handleAddLocation = async (e: React.FormEvent) => {
@@ -1472,11 +1479,33 @@ export default function Warehouse() {
                     <th className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:text-gray-700 transition-colors" onClick={() => toggleSort('quantity')}>
                       <span className="flex items-center gap-1 justify-end">Qty <SortIcon field="quantity" /></span>
                     </th>
-                    <th className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:text-gray-700 transition-colors" onClick={() => toggleSort('avg_cost')}>
-                      <span className="flex items-center gap-1 justify-end">Unit Cost <SortIcon field="avg_cost" /></span>
+                    <th className="px-4 py-3 font-medium text-right">
+                      <div className="flex items-center gap-1.5 justify-end">
+                        <span className="flex items-center gap-1 cursor-pointer select-none hover:text-gray-700 transition-colors" onClick={() => toggleSort('avg_cost')}>Unit Cost <SortIcon field="avg_cost" /></span>
+                        <select
+                          title="Unit Cost display currency"
+                          value={costDisplayCurrency}
+                          onChange={e => setCostDisplayCurrency(e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                          className="text-[10px] font-bold uppercase bg-gray-50 border border-gray-200 rounded px-1 py-0.5 text-gray-600 focus:ring-1 focus:ring-primary cursor-pointer"
+                        >
+                          {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
                     </th>
-                    <th className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:text-gray-700 transition-colors" onClick={() => toggleSort('retail_price')}>
-                      <span className="flex items-center gap-1 justify-end">Retail <SortIcon field="retail_price" /></span>
+                    <th className="px-4 py-3 font-medium text-right">
+                      <div className="flex items-center gap-1.5 justify-end">
+                        <span className="flex items-center gap-1 cursor-pointer select-none hover:text-gray-700 transition-colors" onClick={() => toggleSort('retail_price')}>Retail <SortIcon field="retail_price" /></span>
+                        <select
+                          title="Retail display currency"
+                          value={retailDisplayCurrency}
+                          onChange={e => setRetailDisplayCurrency(e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                          className="text-[10px] font-bold uppercase bg-emerald-50 border border-emerald-200 rounded px-1 py-0.5 text-emerald-700 focus:ring-1 focus:ring-emerald-400 cursor-pointer"
+                        >
+                          {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
                     </th>
                     <th className="px-4 py-3 font-medium text-center">Actions</th>
                   </tr>
@@ -1584,9 +1613,9 @@ export default function Warehouse() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-semibold text-gray-900 tabular-nums">{r.quantity.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right text-gray-700 tabular-nums">{formatCurrency(r.item.avg_cost_USD)}</td>
+                      <td className="px-4 py-3 text-right text-gray-700 tabular-nums">{formatInCurrency(r.item.avg_cost_USD, costDisplayCurrency)}</td>
                       <td className="px-4 py-3 text-right">
-                        <p className="font-bold text-gray-900 tabular-nums">{formatCurrency(r.item.retail_price || 0)}</p>
+                        <p className="font-bold text-gray-900 tabular-nums">{formatInCurrency(r.item.retail_price || 0, retailDisplayCurrency)}</p>
                         {r.profitMargin > 0 && (
                           <p className={clsx("text-[10px] font-bold mt-0.5", r.profitMargin >= 30 ? 'text-emerald-600' : r.profitMargin >= 15 ? 'text-blue-600' : 'text-gray-400')}>
                             {r.profitMargin.toFixed(0)}% margin
@@ -1726,12 +1755,12 @@ export default function Warehouse() {
                           <p className="text-base font-extrabold text-blue-900 mt-0.5">{r.quantity}</p>
                         </div>
                         <div className="bg-emerald-50 rounded-lg p-2.5 border border-emerald-100">
-                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Unit Cost</p>
-                          <p className="text-[11px] font-bold text-emerald-900 mt-0.5">{formatCurrency(r.item.avg_cost_USD)}</p>
+                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Unit Cost ({costDisplayCurrency})</p>
+                          <p className="text-[11px] font-bold text-emerald-900 mt-0.5">{formatInCurrency(r.item.avg_cost_USD, costDisplayCurrency)}</p>
                         </div>
                         <div className="bg-purple-50 rounded-lg p-2.5 border border-purple-100">
-                          <p className="text-[9px] uppercase font-bold text-purple-600 tracking-wider">Retail</p>
-                          <p className="text-[11px] font-bold text-purple-900 mt-0.5">{formatCurrency(r.item.retail_price || 0)}</p>
+                          <p className="text-[9px] uppercase font-bold text-purple-600 tracking-wider">Retail ({retailDisplayCurrency})</p>
+                          <p className="text-[11px] font-bold text-purple-900 mt-0.5">{formatInCurrency(r.item.retail_price || 0, retailDisplayCurrency)}</p>
                           {r.profitMargin > 0 && <p className="text-[9px] font-bold text-purple-500 mt-0.5">{r.profitMargin.toFixed(0)}% margin</p>}
                         </div>
                       </div>
@@ -3925,27 +3954,61 @@ export default function Warehouse() {
 
           <div className="space-y-3">
              <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Physical Distribution</h5>
-             <div className="bg-gray-50 rounded-[1.5rem] border border-gray-100 overflow-hidden divide-y divide-gray-100">
-                {stockDistribution?.distributions.map(loc => (
-                  <div key={loc.id} className="p-4 flex items-center justify-between hover:bg-white transition-colors">
-                     <div className="flex items-center gap-3">
-                        <div className={clsx(
-                          "w-10 h-10 rounded-xl flex items-center justify-center",
-                          loc.type === 'warehouse' ? 'bg-blue-100 text-blue-600' : 'bg-emerald-100 text-emerald-600'
-                        )}>
-                           {loc.type === 'warehouse' ? <WarehouseIcon className="w-5 h-5" /> : <Store className="w-5 h-5" />}
-                        </div>
-                        <div>
-                           <p className="text-base font-bold text-gray-900">{loc.name}</p>
-                           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-tight">{loc.type} · {loc.country}</p>
-                        </div>
+             {/* Warehouses first */}
+             {(() => {
+               const warehouses = stockDistribution?.distributions.filter(l => l.type === 'warehouse') ?? [];
+               const shops = stockDistribution?.distributions.filter(l => l.type !== 'warehouse') ?? [];
+               return (
+                 <div className="space-y-2">
+                   {warehouses.length > 0 && (
+                     <div>
+                       <p className="text-[9px] font-black text-blue-500 uppercase tracking-widest px-1 mb-1">Warehouse</p>
+                       <div className="bg-blue-50/60 rounded-2xl border border-blue-100 overflow-hidden divide-y divide-blue-100">
+                         {warehouses.map(loc => (
+                           <div key={loc.id} className="p-4 flex items-center justify-between hover:bg-white transition-colors">
+                             <div className="flex items-center gap-3">
+                               <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-blue-100 text-blue-600">
+                                 <WarehouseIcon className="w-5 h-5" />
+                               </div>
+                               <div>
+                                 <p className="text-base font-bold text-gray-900">{loc.name}</p>
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-tight">{loc.type} · {loc.country}</p>
+                               </div>
+                             </div>
+                             <div className="text-right">
+                               <p className="text-base font-bold text-blue-700 tabular-nums">{loc.qty.toLocaleString()} Units</p>
+                             </div>
+                           </div>
+                         ))}
+                       </div>
                      </div>
-                     <div className="text-right">
-                        <p className="text-base font-bold text-gray-900 tabular-nums">{loc.qty.toLocaleString()} Units</p>
+                   )}
+                   {shops.length > 0 && (
+                     <div>
+                       <p className="text-[9px] font-black text-emerald-600 uppercase tracking-widest px-1 mb-1">Shops</p>
+                       <div className="bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden divide-y divide-gray-100">
+                         {shops.map(loc => (
+                           <div key={loc.id} className="p-4 flex items-center justify-between hover:bg-white transition-colors">
+                             <div className="flex items-center gap-3">
+                               <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-emerald-100 text-emerald-600">
+                                 <Store className="w-5 h-5" />
+                               </div>
+                               <div>
+                                 <p className="text-base font-bold text-gray-900">{loc.name}</p>
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-tight">{loc.type} · {loc.country}</p>
+                               </div>
+                             </div>
+                             <div className="text-right">
+                               <p className="text-base font-bold text-gray-900 tabular-nums">{loc.qty.toLocaleString()} Units</p>
+                             </div>
+                           </div>
+                         ))}
+                       </div>
                      </div>
-                  </div>
-                ))}
-             </div>
+                   )}
+                 </div>
+               );
+             })()}
           </div>
           
           <div className="p-4 bg-gray-900 rounded-2xl text-white">

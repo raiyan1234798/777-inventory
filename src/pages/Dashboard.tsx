@@ -13,6 +13,7 @@ import clsx from 'clsx';
 import { Link } from 'react-router-dom';
 import { Sparkline, DonutChart, Gauge } from '../components/DashboardCharts';
 import Modal from '../components/Modal';
+import { sortStockDistribution } from '../lib/stockDistribution';
 
 export default function Dashboard() {
   const { inventory, items, locations, sales, transactions, notifications, containers, expenses, targets } = useStore();
@@ -42,7 +43,7 @@ export default function Dashboard() {
 
     return { 
       item: drillDownType === 'item' ? items.find(i => i.id === selectedItemId) : null, 
-      distributions 
+      distributions: sortStockDistribution(distributions),
     };
   }, [selectedItemId, drillDownType, inventory, items, locations]);
 
@@ -348,7 +349,7 @@ export default function Dashboard() {
                 <div className="w-1.5 h-8 bg-primary rounded-full" />
                 <h2 className="text-xl font-black text-gray-900 tracking-tight">Global Transaction Stream</h2>
               </div>
-              <Link to="/transfers" className="px-4 py-2 rounded-xl bg-gray-50 text-[10px] font-black uppercase tracking-widest text-gray-400 hover:bg-primary hover:text-white transition-all">
+              <Link to="/reports" className="px-4 py-2 rounded-xl bg-gray-50 text-[10px] font-black uppercase tracking-widest text-gray-400 hover:bg-primary hover:text-white transition-all">
                 Full Ledger
               </Link>
             </div>
