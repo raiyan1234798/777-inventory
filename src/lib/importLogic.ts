@@ -170,9 +170,17 @@ export function findExistingItemForImport(
         
         // Exact match
         if (bName === parsedCatNorm) score = 100;
-        // Prefix match (e.g. A1SUMM vs A1SUMR -> both start with A1SUM)
-        else if (bName && parsedCatNorm && (bName.startsWith(parsedCatNorm.slice(0, 4)) || parsedCatNorm.startsWith(bName.slice(0, 4)))) {
-          score = 50;
+        // Similarity match (Prefix or Substring)
+        else {
+          const bNums = bName.match(/\d+/g)?.join('') || '';
+          const pNums = parsedCatNorm.match(/\d+/g)?.join('') || '';
+
+          // If both strings have numbers, they MUST match (e.g. 35KG != 80KG)
+          if (bNums && pNums && bNums !== pNums) {
+            score = 0;
+          } else if (bName && parsedCatNorm && (bName.startsWith(parsedCatNorm.slice(0, 4)) || parsedCatNorm.startsWith(bName.slice(0, 4)))) {
+            score = 50;
+          }
         }
         return { item: it, score, bName };
       });
