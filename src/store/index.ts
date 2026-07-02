@@ -424,22 +424,54 @@ export function formatInCurrency(amountUSD: number | null | undefined, currency:
 }
 
 export function formatRetailPrice(item: Item, displayCurrency: string): string {
-  if (item.retail_price_local != null && displayCurrency === (item.local_currency || 'ZMW')) {
+  if (displayCurrency === (item.local_currency || 'ZMW')) {
+    if (item.retail_price_local != null) {
+      const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
+      const price = item.retail_price_local;
+      const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return `${symbol}${formatted}`;
+    }
+    // Fallback for old items missing a local price: Use a FIXED exchange rate of 18.40 so it NEVER fluctuates dynamically.
     const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
-    const price = item.retail_price_local;
+    const price = (item.retail_price || 0) * 18.40;
     const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return `${symbol}${formatted}`;
   }
+  
+  // If requesting USD, always return the pure USD price
+  if (displayCurrency === 'USD') {
+    const symbol = '$';
+    const price = item.retail_price || 0;
+    const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${symbol}${formatted}`;
+  }
+
   return formatInCurrency(item.retail_price || 0, displayCurrency);
 }
 
 export function formatUnitCost(item: Item, displayCurrency: string): string {
-  if (item.avg_cost_local != null && displayCurrency === (item.local_currency || 'ZMW')) {
+  if (displayCurrency === (item.local_currency || 'ZMW')) {
+    if (item.avg_cost_local != null) {
+      const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
+      const cost = item.avg_cost_local;
+      const formatted = cost % 1 === 0 ? cost.toLocaleString('en-US') : cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return `${symbol}${formatted}`;
+    }
+    // Fallback for old items missing a local price: Use a FIXED exchange rate of 18.40 so it NEVER fluctuates dynamically.
     const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
-    const cost = item.avg_cost_local;
+    const cost = (item.avg_cost_USD || 0) * 18.40;
     const formatted = cost % 1 === 0 ? cost.toLocaleString('en-US') : cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return `${symbol}${formatted}`;
   }
+  
+  // If requesting USD, always return the pure USD cost
+  if (displayCurrency === 'USD') {
+    const symbol = '$';
+    const cost = item.avg_cost_USD || 0;
+    const formatted = cost % 1 === 0 ? cost.toLocaleString('en-US') : cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${symbol}${formatted}`;
+  }
+
   return formatInCurrency(item.avg_cost_USD || 0, displayCurrency);
 }
 
