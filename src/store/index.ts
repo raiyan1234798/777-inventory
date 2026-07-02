@@ -402,7 +402,7 @@ export function formatCurrency(amount: number | null | undefined, currency: stri
 }
 
 /**
- * formatStaticCurrency uses the fixed fallback exchange rate (18.40) 
+ * formatStaticCurrency uses the fixed fallback exchange rate (18.50) 
  * for calculating total inventory values so they don't fluctuate 
  * when the global exchange rate changes.
  */
@@ -421,7 +421,7 @@ export function formatStaticCurrency(amountUSD: number | null | undefined): stri
   let targetAmount = amountUSD;
   
   if (activeBase === 'ZMW') {
-    targetAmount = amountUSD * 18.40;
+    targetAmount = amountUSD * 18.50;
   } else if (activeBase !== 'USD') {
     targetAmount = fromUSD(amountUSD, activeBase);
   }
@@ -465,9 +465,9 @@ export function formatRetailPrice(item: Item, displayCurrency: string): string {
       const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       return `${symbol}${formatted}`;
     }
-    // Fallback for old items missing a local price: Use a FIXED exchange rate of 18.40 so it NEVER fluctuates dynamically.
+    // Fallback for old items missing a local price: Use a FIXED exchange rate of 18.50 so it NEVER fluctuates dynamically.
     const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
-    const price = (item.retail_price || 0) * 18.40;
+    const price = (item.retail_price || 0) * 18.50;
     const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return `${symbol}${formatted}`;
   }
@@ -491,9 +491,9 @@ export function formatUnitCost(item: Item, displayCurrency: string): string {
       const formatted = cost % 1 === 0 ? cost.toLocaleString('en-US') : cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       return `${symbol}${formatted}`;
     }
-    // Fallback for old items missing a local price: Use a FIXED exchange rate of 18.40 so it NEVER fluctuates dynamically.
+    // Fallback for old items missing a local price: Use a FIXED exchange rate of 18.50 so it NEVER fluctuates dynamically.
     const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
-    const cost = (item.avg_cost_USD || 0) * 18.40;
+    const cost = (item.avg_cost_USD || 0) * 18.50;
     const formatted = cost % 1 === 0 ? cost.toLocaleString('en-US') : cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return `${symbol}${formatted}`;
   }
