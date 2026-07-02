@@ -458,7 +458,16 @@ export function formatInCurrency(amountUSD: number | null | undefined, currency:
 }
 
 export function formatRetailPrice(item: Item, displayCurrency: string): string {
-  if (displayCurrency === (item.local_currency || 'ZMW')) {
+  // If requesting USD, always return the pure USD price
+  if (displayCurrency === 'USD') {
+    const symbol = '$';
+    const price = item.retail_price || 0;
+    const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${symbol}${formatted}`;
+  }
+
+  // If requesting ZMW (or any other local currency), prioritize the fixed retail_price_local
+  if (displayCurrency === 'ZMW' || displayCurrency === item.local_currency) {
     if (item.retail_price_local != null) {
       const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
       const price = item.retail_price_local;
@@ -468,14 +477,6 @@ export function formatRetailPrice(item: Item, displayCurrency: string): string {
     // Fallback for old items missing a local price: Use a FIXED exchange rate of 18.50 so it NEVER fluctuates dynamically.
     const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
     const price = (item.retail_price || 0) * 18.50;
-    const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return `${symbol}${formatted}`;
-  }
-  
-  // If requesting USD, always return the pure USD price
-  if (displayCurrency === 'USD') {
-    const symbol = '$';
-    const price = item.retail_price || 0;
     const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return `${symbol}${formatted}`;
   }

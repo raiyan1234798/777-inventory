@@ -369,11 +369,13 @@ export default function GlobalRecordSaleModal() {
                                 const newGroups = [...recordSaleGroups];
                                 const selected = items.find(i => i.id === e.target.value);
                                 newGroups[groupIndex].items[itemIndex].item_id = e.target.value;
-                                if (selected && selected.retail_price_local) {
-                                  newGroups[groupIndex].items[itemIndex].selling_price = Math.round(selected.retail_price_local * (newGroups[groupIndex].items[itemIndex].quantity || 1));
-                                  if (selected.local_currency) {
-                                    newGroups[groupIndex].items[itemIndex].currency = selected.local_currency;
+                                if (selected) {
+                                  if (selected.retail_price_local != null) {
+                                    newGroups[groupIndex].items[itemIndex].selling_price = Math.round(selected.retail_price_local * (newGroups[groupIndex].items[itemIndex].quantity || 1));
+                                    newGroups[groupIndex].items[itemIndex].currency = selected.local_currency || 'ZMW';
                                   } else {
+                                    // Fallback to fixed 18.50 rate for ZMW
+                                    newGroups[groupIndex].items[itemIndex].selling_price = Math.round((selected.retail_price || 0) * 18.50 * (newGroups[groupIndex].items[itemIndex].quantity || 1));
                                     newGroups[groupIndex].items[itemIndex].currency = 'ZMW';
                                   }
                                 }
