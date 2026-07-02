@@ -12,7 +12,7 @@ import { collection, doc, setDoc, updateDoc, writeBatch } from 'firebase/firesto
 import Modal from '../components/Modal';
 import BulkBrandPriceModal from '../components/BulkBrandPriceModal';
 import {
-  useStore, logAction, COUNTRIES, CURRENCIES, toUSD, fromUSD, formatCurrency, formatInCurrency, formatUnitCost, formatRetailPrice, formatDualCurrency, formatHistoricalDualCurrency,
+  useStore, logAction, COUNTRIES, CURRENCIES, toUSD, fromUSD, formatCurrency, formatStaticCurrency, formatInCurrency, formatUnitCost, formatRetailPrice, formatDualCurrency, formatHistoricalDualCurrency,
   type Location, type Brand, type Item, type InventoryEntry, type ImportSession
 } from '../store';
 import { useAuthStore } from '../store/authStore';
@@ -1494,7 +1494,7 @@ export default function Warehouse() {
               <Tag className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-xl lg:text-2xl font-extrabold text-gray-900 mt-2 tracking-tighter tabular-nums overflow-hidden">{formatCurrency(totalValue)}</p>
+          <p className="text-xl lg:text-2xl font-extrabold text-gray-900 mt-2 tracking-tighter tabular-nums overflow-hidden">{formatStaticCurrency(totalValue)}</p>
           <p className="text-[10px] text-gray-400 mt-5 font-medium flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> At average cost
           </p>
@@ -1506,7 +1506,7 @@ export default function Warehouse() {
               <TrendingUp className="w-4 h-4" />
             </div>
           </div>
-          <p className={clsx("text-xl lg:text-2xl font-extrabold mt-2 tracking-tighter tabular-nums overflow-hidden", potentialProfit > 0 ? 'text-violet-600' : 'text-gray-900')}>{formatCurrency(potentialProfit)}</p>
+          <p className={clsx("text-xl lg:text-2xl font-extrabold mt-2 tracking-tighter tabular-nums overflow-hidden", potentialProfit > 0 ? 'text-violet-600' : 'text-gray-900')}>{formatStaticCurrency(potentialProfit)}</p>
           <p className="text-[10px] text-gray-400 mt-5 font-medium">Retail − Cost on current stock</p>
         </div>
         <div 

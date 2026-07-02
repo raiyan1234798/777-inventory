@@ -401,6 +401,40 @@ export function formatCurrency(amount: number | null | undefined, currency: stri
   return `${symbol}${formattedAmount}`;
 }
 
+/**
+ * formatStaticCurrency uses the fixed fallback exchange rate (18.40) 
+ * for calculating total inventory values so they don't fluctuate 
+ * when the global exchange rate changes.
+ */
+export function formatStaticCurrency(amountUSD: number | null | undefined): string {
+  if (amountUSD === null || amountUSD === undefined) return '—';
+  
+  let activeBase = 'USD';
+  try {
+    const state = useStore.getState();
+    if (state && state.baseCurrency) {
+      activeBase = state.baseCurrency;
+    }
+  } catch (e) {}
+  
+  let targetCurrency = activeBase;
+  let targetAmount = amountUSD;
+  
+  if (activeBase === 'ZMW') {
+    targetAmount = amountUSD * 18.40;
+  } else if (activeBase !== 'USD') {
+    targetAmount = fromUSD(amountUSD, activeBase);
+  }
+  
+  const symbol = CURRENCY_SYMBOLS[targetCurrency] ?? `${targetCurrency} `;
+  const formattedAmount = targetAmount.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+  
+  return `${symbol}${formattedAmount}`;
+}
+
 const CURRENCY_SYMBOLS: Record<string, string> = {
   INR: '₹', USD: '$', EUR: '€', GBP: '£', PKR: '₨', CNY: '¥',
   SAR: '﷼', AED: 'د.إ', JPY: '¥', CAD: 'C$', AUD: 'A$', SGD: 'S$',

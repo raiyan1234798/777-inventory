@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useStore, formatCurrency, formatDualCurrency, formatHistoricalDualCurrency , calculateDynamicProfit } from "../store";
+import { useStore, formatCurrency, formatStaticCurrency, formatDualCurrency, formatHistoricalDualCurrency , calculateDynamicProfit } from "../store";
 import { useAuthStore } from '../store/authStore';
 import { format, subDays, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
 import {
@@ -231,7 +231,7 @@ export default function Dashboard() {
           <div className="mt-8">
             <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Global Asset Value</p>
             <div className="flex items-baseline gap-2 mt-1">
-              <h2 className="text-xl lg:text-2xl font-black text-gray-900 tracking-tighter overflow-hidden tabular-nums">{formatCurrency(stats.totalInventoryValue)}</h2>
+              <h2 className="text-xl lg:text-2xl font-black text-gray-900 tracking-tighter overflow-hidden tabular-nums">{formatStaticCurrency(stats.totalInventoryValue)}</h2>
               <ArrowUpRight className="w-4 h-4 text-emerald-500" />
             </div>
             <button 
@@ -472,7 +472,7 @@ export default function Dashboard() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
                         <p className="text-sm font-black text-gray-800 truncate">{loc.name}</p>
-                        <p className="text-xs font-black text-gray-900">{formatCurrency(loc.totalValue)}</p>
+                        <p className="text-xs font-black text-gray-900">{formatStaticCurrency(loc.totalValue)}</p>
                       </div>
                       <div className="flex items-center justify-between mt-1">
                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tight">{loc.type} · {loc.country}</p>
