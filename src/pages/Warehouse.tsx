@@ -716,7 +716,7 @@ export default function Warehouse() {
       if (editingItemId) {
         // Prepare item data for master record (exclude inventory-specific fields)
         const { stock, inventory_id, id, location_id, brand_manual, retail_price, avg_cost_USD, ...itemData } = itemForm;
-        const processedRetailPrice = retailCurrency === 'ZMW' ? toUSD(retail_price, 'ZMW') : retail_price;
+        const processedRetailPrice = retailCurrency === 'ZMW' ? (retail_price / 18.50) : retail_price;
         const processedAvgCost = avgCostCurrency === 'ZMW' ? toUSD(avg_cost_USD, 'ZMW') : avg_cost_USD;
         
         // Update item master data
@@ -750,7 +750,7 @@ export default function Warehouse() {
       } else {
         // Add new item
         const { id: _, stock, inventory_id, location_id, brand_manual, retail_price, avg_cost_USD, ...itemData } = itemForm;
-        const processedRetailPrice = toUSD(retail_price, 'ZMW');
+        const processedRetailPrice = retailCurrency === 'ZMW' ? (retail_price / 18.50) : retail_price;
         const processedAvgCost = avgCostCurrency === 'ZMW' ? toUSD(avg_cost_USD, 'ZMW') : avg_cost_USD;
 
         const existingItem = items.find(i => 
@@ -886,7 +886,10 @@ export default function Warehouse() {
            if (existingItem) {
               row.matched_item_id = existingItem.id;
               const updates: Partial<any> = {};
-              if (row.retail_price) updates.retail_price = row.retail_price;
+              if (row.retail_price) {
+                updates.retail_price = row.retail_price / 18.50;
+                updates.retail_price_local = row.retail_price;
+              }
               if (row.min_stock_limit && row.min_stock_limit !== 0) updates.min_stock_limit = row.min_stock_limit;
               if (Object.keys(updates).length > 0) {
                  currentBatch.update(doc(db, 'items', existingItem.id), updates);
@@ -902,7 +905,9 @@ export default function Warehouse() {
                id: itemId, brand_id: brandId, name: row.item_name,
                sku: autoSku,
                category: row.category || 'General',
-               retail_price: row.retail_price,
+               retail_price: row.retail_price / 18.50,
+               retail_price_local: row.retail_price,
+               local_currency: 'ZMW',
                min_stock_limit: row.min_stock_limit || 0
              });
              commitOp();
@@ -4115,9 +4120,9 @@ export default function Warehouse() {
                   onChange={e => {
                     const newCurrency = e.target.value as 'USD'|'ZMW';
                     if (newCurrency === 'ZMW' && retailCurrency === 'USD') {
-                       setItemForm(f => ({ ...f, retail_price: Number(fromUSD(f.retail_price, 'ZMW').toFixed(2)) }));
+                       setItemForm(f => ({ ...f, retail_price: Number((f.retail_price * 18.50).toFixed(2)) }));
                     } else if (newCurrency === 'USD' && retailCurrency === 'ZMW') {
-                       setItemForm(f => ({ ...f, retail_price: Number(toUSD(f.retail_price, 'ZMW').toFixed(2)) }));
+                       setItemForm(f => ({ ...f, retail_price: Number((f.retail_price / 18.50).toFixed(2)) }));
                     }
                     setRetailCurrency(newCurrency);
                   }}

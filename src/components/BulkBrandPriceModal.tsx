@@ -65,7 +65,14 @@ export default function BulkBrandPriceModal({
         newCost = costOperation === 'set' ? Number(costValue) : Math.max(0, oldCost + Number(costValue));
       }
 
-      let oldRetail = updateRetail ? fromUSD(item.retail_price || 0, retailCurrency) : 0;
+      let oldRetail = 0;
+      if (updateRetail) {
+        if (retailCurrency === 'ZMW') {
+          oldRetail = item.retail_price_local != null ? item.retail_price_local : Number(((item.retail_price || 0) * 18.50).toFixed(2));
+        } else {
+          oldRetail = fromUSD(item.retail_price || 0, retailCurrency);
+        }
+      }
       let newRetail = oldRetail;
       if (updateRetail && retailValue !== '') {
         newRetail = retailOperation === 'set' ? Number(retailValue) : Math.max(0, oldRetail + Number(retailValue));
@@ -92,11 +99,17 @@ export default function BulkBrandPriceModal({
     setSaving(true);
     try {
       const itemUpdates = previewItems.map(p => {
-        return {
-          id: p.id,
-          avg_cost_USD: updateCost ? toUSD(p.newCost, costCurrency) : undefined,
-          retail_price: updateRetail ? toUSD(p.newRetail, retailCurrency) : undefined
-        };
+        const update: any = { id: p.id };
+        if (updateCost) update.avg_cost_USD = toUSD(p.newCost, costCurrency);
+        if (updateRetail) {
+          if (retailCurrency === 'ZMW') {
+            update.retail_price_local = p.newRetail;
+            update.retail_price = p.newRetail / 18.50;
+          } else {
+            update.retail_price = toUSD(p.newRetail, retailCurrency);
+          }
+        }
+        return update;
       });
 
       await updateBrandPrices(brandId, itemUpdates);

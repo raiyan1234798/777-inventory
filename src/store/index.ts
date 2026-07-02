@@ -491,9 +491,9 @@ export function formatUnitCost(item: Item, displayCurrency: string): string {
       const formatted = cost % 1 === 0 ? cost.toLocaleString('en-US') : cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       return `${symbol}${formatted}`;
     }
-    // Fallback for old items missing a local price: Use a FIXED exchange rate of 18.50 so it NEVER fluctuates dynamically.
+    // For unit costs, we MUST use the dynamic exchange rate as requested by the user.
     const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
-    const cost = (item.avg_cost_USD || 0) * 18.50;
+    const cost = fromUSD(item.avg_cost_USD || 0, displayCurrency);
     const formatted = cost % 1 === 0 ? cost.toLocaleString('en-US') : cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return `${symbol}${formatted}`;
   }
@@ -803,7 +803,7 @@ interface AppState {
   deleteItems: (ids: string[]) => Promise<void>;
   deleteContainers: (ids: string[], revertStock?: boolean) => Promise<void>;
   undoDeleteContainer: (snapshotId: string) => Promise<void>;
-  updateBrandPrices: (brandId: string, itemUpdates: { id: string; avg_cost_USD?: number; retail_price?: number; }[]) => Promise<void>;
+  updateBrandPrices: (brandId: string, itemUpdates: { id: string; avg_cost_USD?: number; retail_price?: number; retail_price_local?: number; }[]) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -1865,7 +1865,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
     await Promise.all(batchPromises);
   },
-  updateBrandPrices: async (brandId: string, itemUpdates) => {
+  updateBrandPrices: async (brandId: string, itemUpdates: { id: string; avg_cost_USD?: number; retail_price?: number; retail_price_local?: number; }[]) => {
     const st = get();
     const items = st.items.filter(i => i.brand_id === brandId);
     if (items.length === 0 || itemUpdates.length === 0) return;
@@ -1878,6 +1878,7 @@ export const useStore = create<AppState>((set, get) => ({
         const fbUpdates: Partial<Item> = {};
         if (update.avg_cost_USD !== undefined) fbUpdates.avg_cost_USD = update.avg_cost_USD;
         if (update.retail_price !== undefined) fbUpdates.retail_price = update.retail_price;
+        if (update.retail_price_local !== undefined) fbUpdates.retail_price_local = update.retail_price_local;
         
         if (Object.keys(fbUpdates).length > 0) {
           b.update(ref, sanitizeForFirestore(fbUpdates));

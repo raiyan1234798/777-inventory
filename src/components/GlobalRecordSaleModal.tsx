@@ -44,6 +44,8 @@ export default function GlobalRecordSaleModal() {
       .sort((a, b) => a.item!.name.localeCompare(b.item!.name));
   }, [recordSaleLocation, inventory, items]);
 
+  const appliedRates = saleDate !== todayDateStr ? { ...exchangeRates, 'ZMW': customZmwRate } : exchangeRates;
+
   const totalEstimatedProfit = allSaleItems.reduce((acc, si) => {
     if (!si.item_id || si.selling_price <= 0) return acc;
     const costUSD = items.find(i => i.id === si.item_id)?.avg_cost_USD
@@ -51,12 +53,12 @@ export default function GlobalRecordSaleModal() {
       ?? 0;
 
     // EXACT formula: profit = (retail_price_per_unit - unit_cost_USD × exchange_rate) × qty
-    const unitCostLocal = fromUSD(costUSD, si.currency); // unit_cost_USD × rate
+    const unitCostLocal = fromUSD(costUSD, si.currency, appliedRates); // unit_cost_USD × rate
     const profitPerUnit = si.selling_price - unitCostLocal;  // retail - cost_in_local
     const profitLocal = profitPerUnit < 0 ? 0 : profitPerUnit * si.quantity;
 
     // Convert local profit back to USD for the summary (formatCurrency will re-convert for display)
-    return acc + toUSD(profitLocal, si.currency);
+    return acc + toUSD(profitLocal, si.currency, appliedRates);
   }, 0);
   
   const totalAmount = allSaleItems.reduce((acc, si) => acc + toUSD(si.selling_price * si.quantity, si.currency), 0);
@@ -86,8 +88,6 @@ export default function GlobalRecordSaleModal() {
     isSubmitting.current = true;
     setSaving(true);
     try {
-      const appliedRates = saleDate !== todayDateStr ? { ...exchangeRates, 'ZMW': customZmwRate } : exchangeRates;
-
       await useStore.getState().batchRecordSale(allSaleItems.map(si => {
         const itemName = items.find(i => i.id === si.item_id)?.name ?? 'Unknown Item';
         return {
