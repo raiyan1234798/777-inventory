@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { FileUp, X } from 'lucide-react';
 import Modal from './Modal';
 import { useStore } from '../store';
@@ -27,11 +27,22 @@ export default function GlobalReturnModal() {
   const [saving, setSaving] = useState(false);
 
   // Compute location items dynamically based on the current location_id
-  const locationItems = inventory.filter(e => e.location_id === returnFormState.location_id).map(e => ({
-    ...e,
-    item: items.find(i => i.id === e.item_id)
-  })).filter(e => e.item);
-
+  const locationItems = useMemo(() => {
+    if (!returnFormState.location_id) return [];
+    
+    const itemMap = new Map();
+    for (const item of items) {
+      itemMap.set(item.id, item);
+    }
+    
+    return inventory
+      .filter(e => e.location_id === returnFormState.location_id)
+      .map(e => ({
+        ...e,
+        item: itemMap.get(e.item_id)
+      }))
+      .filter(e => e.item);
+  }, [returnFormState.location_id, inventory, items]);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!returnFormState.location_id || !returnFormState.item_id) return;
@@ -191,7 +202,7 @@ export default function GlobalReturnModal() {
               {returnFormState.image_proof && (
                 <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-gray-200 flex-shrink-0 bg-gray-100">
                   <img src={returnFormState.image_proof} alt="Proof Preview" className="object-cover w-full h-full" />
-                  <button type="button" onClick={() => setReturnFormState({...returnFormState, image_proof: undefined})} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-0.5 hover:bg-red-600">
+                  <button type="button" onClick={() => setReturnFormState({...returnFormState, image_proof: ''})} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-0.5 hover:bg-red-600">
                     <X className="w-3 h-3" />
                   </button>
                 </div>

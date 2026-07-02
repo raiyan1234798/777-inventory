@@ -1,3 +1,5 @@
+import { calculateDynamicProfit, toUSD } from "../store";
+
 /**
  * Dynamic Data Export Service
  * Handles exporting all data types to Excel
@@ -52,7 +54,7 @@ export class DataExporter {
       'Currency': s.currency || 'USD',
       'Total Revenue (INR)': s.converted_price_USD || 0,
       'Cost (INR)': (s.avg_cost_USD || 0) * (s.quantity || 0),
-      'Profit (INR)': s.profit_USD || 0,
+      'Profit (INR)': calculateDynamicProfit(s),
       'Sold By': s.sold_by || 'Unknown',
       'Date': s.timestamp ? format(new Date(s.timestamp), 'MMM dd, yyyy HH:mm') : '—',
       'Location': locations.find(l => l.id === s.location_id)?.name || s.location_id || 'Unknown'
@@ -213,7 +215,7 @@ export class DataExporter {
       const locReturns = (returns || []).filter(r => r.location_id === location.id);
       
       const totalRevenue = locSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
-      const totalProfit = locSales.reduce((sum, s) => sum + (s.profit_USD || 0), 0);
+      const totalProfit = locSales.reduce((sum, s) => sum + (calculateDynamicProfit(s)), 0);
       const totalStockValue = locInv.reduce((sum, i) => sum + (i.quantity || 0) * (i.avg_cost_USD || 0), 0);
       const totalItems = locInv.reduce((sum, i) => sum + (i.quantity || 0), 0);
       

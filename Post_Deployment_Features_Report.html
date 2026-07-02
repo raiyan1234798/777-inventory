@@ -1,0 +1,33 @@
+<h1>Phase 2 Feature Additions &amp; Architectural Modifications</h1>
+<p>This document details all structural modifications, new feature additions, layout redesigns, and architectural changes implemented in the 777 Inventory &amp; Distribution System that fall outside the initial deployment scope outlined in the original Service Level Agreement (SLA).</p>
+<h2>1. Brand Management Architecture (New Module)</h2>
+<ul>
+<li><strong>Global Brand Tracking:</strong> Added a completely new structural layer linking every single item/SKU to specific &quot;Brands&quot; (e.g., HOME TEXTILES, ZUMBA SUM).</li>
+<li><strong>Brand Filtering:</strong> Implemented advanced filtering by Brand across the Global Import Utility, Sales modals, and Reports pages.</li>
+<li><strong>UI Redesign:</strong> Modified dropdowns and interfaces across the system to display the <code>(Brand Name)</code> directly next to items, preventing staff from selecting incorrect SKUs.</li>
+</ul>
+<h2>2. Post-Transaction Reconciliation Engine (New Feature)</h2>
+<ul>
+<li><strong>Transfer Reconciliation:</strong> Engineered an entirely new interface (<code>Reconcile Transfer Stocks</code> modal) allowing administrators to retrospectively fix mistakes in past transfers, autonomously calculating delta values.</li>
+<li><strong>Sales Reconciliation &amp; Editing:</strong> Built an <code>Edit Sale</code> system allowing authorized users to go back to previous days and dynamically adjust the quantity or selling price of already-completed sales.</li>
+</ul>
+<h2>3. Intelligent Item Swapping &amp; Deletion (Architectural Change)</h2>
+<ul>
+<li><strong>Sale Deletion Engine:</strong> Added the ability to completely delete a past sale record. This triggers a complex backend process that automatically refunds the exact quantity back into the specific shop&#39;s active inventory and accurately deducts the profit from the total.</li>
+<li><strong>Brand/Item Swapping:</strong> Added the ability to swap an incorrectly recorded item for a different item in past records. The system autonomously handles restocking the old item, deducting the new item, and recalculating the exact net profit based on the new item&#39;s specific unit cost.</li>
+</ul>
+<h2>4. Historical Multi-Currency Exchange Rates (New Feature)</h2>
+<ul>
+<li><strong>Date-Specific ZMW Rates:</strong> The original system assumed standard real-time POS processing. A custom architectural feature was built that allows users to input a specific <code>ZMW to USD</code> exchange rate <em>tied directly to the specific historical date of the sale</em>.</li>
+<li><strong>Profit Consistency:</strong> This ensures that if a past sale is recorded, the net profit and total sales values are calculated using that exact day&#39;s localized currency value, rather than fluctuating based on today&#39;s current rate.</li>
+</ul>
+<h2>5. Advanced Data Interception &amp; Deduplication (Architectural Change)</h2>
+<ul>
+<li><strong>Ghost Transaction Filter:</strong> Rewrote the global database fetching logic (<code>store/index.ts</code>) to actively intercept data as it loads from Firebase. The system automatically detects and hides duplicate &quot;ghost&quot; transfer logs.</li>
+<li><strong>Integrity Protection:</strong> This ensures Stock Reports remain mathematically perfect, natively mitigating conflicting manual data edits without requiring raw database intervention.</li>
+</ul>
+<h2>6. Dynamic Date-Locking for Reports (Layout &amp; Logic Redesign)</h2>
+<ul>
+<li><strong>Optimized Export Logic:</strong> Completely redesigned how the Reports Archive interacts with the PDF/Excel extractors.</li>
+<li><strong>Contextual Accuracy:</strong> Dates now default to &quot;Today,&quot; preventing the system from indiscriminately exporting the entire database history by default, and ensuring PDF/Excel headers accurately reflect the exact user-requested date range.</li>
+</ul>

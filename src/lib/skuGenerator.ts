@@ -89,6 +89,31 @@ export function generateBrandSKU(
   return base;
 }
 
+/**
+ * Find which column to use as the SKU source from an (upper-cased) header row.
+ *
+ * Prefers a dedicated "SKU" column (which holds the lengthy descriptive name)
+ * and only falls back to a "CODE" column when no SKU column exists.
+ *
+ * @returns the column index, or -1 when neither is present.
+ */
+export function findSkuColumn(headerRowUpper: string[]): number {
+  let idx = headerRowUpper.findIndex(c => c.includes('SKU'));
+  if (idx === -1) idx = headerRowUpper.findIndex(c => c.includes('CODE'));
+  return idx;
+}
+
+/**
+ * Resolve the final SKU for an imported row.
+ *
+ * The SKU from the file is used verbatim (never abbreviated or altered). Only
+ * rows without any SKU value fall back to using the item name as the SKU.
+ */
+export function resolveImportSku(skuValue: string | undefined | null, itemName: string): string {
+  const v = (skuValue ?? '').trim();
+  return v ? v : (itemName ?? '').trim();
+}
+
 export function canonicalSKU(brandName: string, itemName: string, codeOverride?: string): string {
   const cleanOverride = codeOverride ? codeOverride.trim().toUpperCase() : '';
 

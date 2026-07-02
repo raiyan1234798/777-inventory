@@ -2,10 +2,38 @@ import { create } from 'zustand';
 import { db } from '../lib/firebase';
 import {
   collection, doc, setDoc, deleteDoc, updateDoc,
-  writeBatch, onSnapshot, query, orderBy
+  writeBatch, onSnapshot, query, orderBy, where, addDoc
 } from 'firebase/firestore';
 import { DEFAULT_EXCHANGE_RATES } from '../lib/exchangeRates';
 import { transactionLockManager } from '../lib/transactionLocks';
+import { useAuthStore } from './authStore';
+
+// ─── Audit Log Helper ────────────────────────────────────────────────────────
+export async function logAction(
+  action: 'create' | 'update' | 'delete' | 'clear',
+  entityType: 'item' | 'container' | 'brand' | 'location' | 'other',
+  entityId: string,
+  entityName: string,
+  details: string
+) {
+  try {
+    const user = useAuthStore.getState().user;
+    if (!user) return; // Silent return if not logged in
+    
+    await addDoc(collection(db, 'audit_logs'), {
+      action,
+      entityType,
+      entityId,
+      entityName,
+      details,
+      userId: user.uid,
+      userEmail: user.email,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Failed to write audit log:', error);
+  }
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +62,7 @@ export interface Item {
   sku: string;
   min_stock_limit: number;
   retail_price?: number; 
+  retail_price_local?: number;
   avg_cost_USD?: number; 
   avg_cost_local?: number;
   local_currency?: string;
@@ -86,6 +115,7 @@ export interface Transaction {
   transfer_session_id?: string;
   unit_cost_local?: number;
   local_currency?: string;
+  exchange_rates?: Record<string, number>;
 }
 
 export interface Sale {
@@ -104,6 +134,7 @@ export interface Sale {
   local_currency?: string;
   sold_by: string;
   timestamp: string;
+  exchange_rates?: Record<string, number>;
 }
 
 export interface ReturnRecord {
@@ -177,6 +208,25 @@ export interface ImportSession {
   performed_by?: string;
 }
 
+// Snapshot stored when a container is deleted with revertStock=true, for undo within 24hrs
+export interface DeletedContainerSnapshot {
+  id: string;
+  container_no: string;
+  deleted_at: string;      // ISO timestamp
+  expires_at: string;      // ISO timestamp (deleted_at + 24h)
+  location_id: string;
+  location_name?: string;
+  currency: string;
+  items: {
+    item_id: string;
+    item_name: string;
+    sku: string;
+    receivedQty: number;
+    unitCost: number;
+  }[];
+  total_items_count: number;
+}
+
 
 export interface TransferSessionItem {
   item_id: string;
@@ -208,6 +258,18 @@ export type Permission =
   | 'record_sales'
   | 'manage_transfers'
   | 'view_reports';
+
+export interface AuditLog {
+  id: string;
+  action: 'create' | 'update' | 'delete' | 'clear';
+  entityType: 'item' | 'container' | 'brand' | 'location' | 'other';
+  entityId: string;
+  entityName: string;
+  details: string;
+  userId: string;
+  userEmail: string;
+  timestamp: string;
+}
 
 export interface User {
   id: string;
@@ -269,14 +331,37 @@ export const COUNTRIES = [
   { name: 'USA', currency: 'USD' }
 ];
 
-export function toUSD(amount: number, currency: string): number {
-  const rate = EXCHANGE_RATES[currency] ?? 1;
+export function toUSD(amount: number, currency: string, customRates?: Record<string, number>): number {
+  const state = useStore.getState();
+  const rates = customRates || state?.exchangeRates || EXCHANGE_RATES;
+  const rate = rates[currency] ?? 1;
   return rate > 0 ? amount / rate : amount;
 }
 
-export function fromUSD(amountUSD: number, currency: string): number {
-  const rate = EXCHANGE_RATES[currency] ?? 1;
+export function fromUSD(amountUSD: number, currency: string, customRates?: Record<string, number>): number {
+  const state = useStore.getState();
+  const rates = customRates || state?.exchangeRates || EXCHANGE_RATES;
+  const rate = rates[currency] ?? 1;
   return amountUSD * rate;
+}
+
+export function calculateDynamicProfit(sale: { selling_price: number; quantity: number; avg_cost_USD: number; profit_local?: number; profit_USD?: number; currency: string; exchange_rates?: Record<string, number>; [key: string]: any }, customRates?: Record<string, number>): number {
+  const currency = sale.currency || 'USD';
+  const qty = sale.quantity || 1;
+
+  // ── PREFERRED: use the profit that was saved at sale time with historical rates ──
+  if (sale.profit_local != null && sale.profit_local >= 0) {
+    const historicalRates = sale.exchange_rates || customRates;
+    return toUSD(sale.profit_local, currency, historicalRates);
+  }
+
+  // ── FALLBACK: exact formula ──
+  // profit = (retail_price_per_unit - unit_cost_USD × exchange_rate) × qty
+  const rates = customRates || sale.exchange_rates;
+  const unitCostLocal = fromUSD(sale.avg_cost_USD || 0, currency, rates);
+  const profitPerUnit = (sale.selling_price || 0) - unitCostLocal;
+  const profitLocal = profitPerUnit < 0 ? 0 : profitPerUnit * qty;
+  return toUSD(profitLocal, currency, rates);
 }
 
 export function formatCurrency(amount: number | null | undefined, currency: string = 'USD'): string {
@@ -314,6 +399,48 @@ export function formatCurrency(amount: number | null | undefined, currency: stri
   });
   
   return `${symbol}${formattedAmount}`;
+}
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  INR: '₹', USD: '$', EUR: '€', GBP: '£', PKR: '₨', CNY: '¥',
+  SAR: '﷼', AED: 'د.إ', JPY: '¥', CAD: 'C$', AUD: 'A$', SGD: 'S$',
+  KWD: 'د.ك', OMR: 'ر.ع.', BHD: '.د.ب', QAR: 'ر.ق', MYR: 'RM', THB: '฿',
+  ZMW: 'K',
+};
+
+/**
+ * Format a USD-stored amount in an explicit target currency, independent of the
+ * global base-currency toggle. Used by the inventory table's per-column currency
+ * selectors (Unit Cost defaults to USD, Retail defaults to ZMW).
+ */
+export function formatInCurrency(amountUSD: number | null | undefined, currency: string): string {
+  if (amountUSD === null || amountUSD === undefined) return '—';
+  const converted = currency === 'USD' ? amountUSD : fromUSD(amountUSD, currency);
+  const symbol = CURRENCY_SYMBOLS[currency] ?? `${currency} `;
+  
+  // Custom precision handling: if integer, show without decimals. If has decimals, show 2 decimals.
+  const formatted = converted % 1 === 0 ? converted.toLocaleString('en-US') : converted.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${symbol}${formatted}`;
+}
+
+export function formatRetailPrice(item: Item, displayCurrency: string): string {
+  if (item.retail_price_local != null && displayCurrency === (item.local_currency || 'ZMW')) {
+    const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
+    const price = item.retail_price_local;
+    const formatted = price % 1 === 0 ? price.toLocaleString('en-US') : price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${symbol}${formatted}`;
+  }
+  return formatInCurrency(item.retail_price || 0, displayCurrency);
+}
+
+export function formatUnitCost(item: Item, displayCurrency: string): string {
+  if (item.avg_cost_local != null && displayCurrency === (item.local_currency || 'ZMW')) {
+    const symbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
+    const cost = item.avg_cost_local;
+    const formatted = cost % 1 === 0 ? cost.toLocaleString('en-US') : cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${symbol}${formatted}`;
+  }
+  return formatInCurrency(item.avg_cost_USD || 0, displayCurrency);
 }
 
 /**
@@ -398,6 +525,8 @@ interface AppState {
   targets: ShopTarget[];
   importSessions: ImportSession[];
   transferSessions: TransferSession[];
+  deletedContainerSnapshots: DeletedContainerSnapshot[];
+  auditLogs: AuditLog[];
   isSyncing: boolean;
   isSyncingRates: boolean;
   baseCurrency: string;
@@ -415,9 +544,11 @@ interface AppState {
     items: { brand_id: string; item_id: string; quantity: number }[];
     performed_by: string;
     notes?: string;
+    date?: string;
   }) => Promise<string>;
   fixTransferStock: (sessionId: string, fixes: { item_id: string; newQty: number }[]) => Promise<void>;
   deleteTransferSession: (id: string) => Promise<void>;
+  deleteTransferSessions: (ids: string[]) => Promise<void>;
   setBaseCurrency: (c: string) => void;
   fetchLiveExchangeRates: () => Promise<void>;
 
@@ -426,12 +557,12 @@ interface AppState {
   isTransferModalOpen: boolean;
   isTransferModalMinimized: boolean;
   transferForm: { from_location: string; to_location: string; notes?: string };
-  transferItems: { brand_id: string; item_id: string; quantity: number; _id: number }[];
+  transferGroups: { brand_id: string; _id: number; items: { item_id: string; quantity: number; _id: number }[] }[];
   
   isRecordSaleModalOpen: boolean;
   isRecordSaleModalMinimized: boolean;
   recordSaleLocation: string;
-  recordSaleItems: { brand_id: string; item_id: string; quantity: number; selling_price: number; currency: string; _id: number }[];
+  recordSaleGroups: { brand_id: string; _id: number; items: { item_id: string; quantity: number; selling_price: number; currency: string; _id: number }[] }[];
 
   // Setters (called by Firestore listeners)
   setLocations: (d: Location[]) => void;
@@ -450,12 +581,12 @@ interface AppState {
   setTransferModalOpen: (v: boolean) => void;
   setTransferModalMinimized: (v: boolean) => void;
   setTransferForm: (f: { from_location: string; to_location: string }) => void;
-  setTransferItems: (items: any[]) => void;
+  setTransferGroups: (groups: any[]) => void;
 
   setRecordSaleModalOpen: (v: boolean) => void;
   setRecordSaleModalMinimized: (v: boolean) => void;
   setRecordSaleLocation: (v: string) => void;
-  setRecordSaleItems: (items: any[]) => void;
+  setRecordSaleGroups: (groups: any[]) => void;
 
   isReturnModalOpen: boolean;
   isReturnModalMinimized: boolean;
@@ -533,6 +664,7 @@ interface AppState {
     unit_cost: number;
     currency: string;
     is_absolute_override?: boolean;
+    timestamp?: string; // optional backdated timestamp (YYYY-MM-DD or ISO string)
   }[], performed_by: string, options?: { skipNotifications?: boolean; isPending?: boolean }) => Promise<void>;
 
   // Transfer between locations
@@ -545,7 +677,25 @@ interface AppState {
   recordSale: (params: {
     item_id: string; item_name: string; location_id: string;
     quantity: number; selling_price: number; currency: string; sold_by: string;
+    timestamp?: string; exchange_rates?: Record<string, number>;
   }, options?: { skipNotifications?: boolean }) => Promise<void>;
+
+  // Batch Sale from a shop
+  batchRecordSale: (sales: Array<{
+    item_id: string; item_name: string; location_id: string;
+    quantity: number; selling_price: number; currency: string; sold_by: string;
+    timestamp?: string; exchange_rates?: Record<string, number>;
+  }>, options?: { skipNotifications?: boolean }) => Promise<void>;
+
+  // Edit Sale
+  editSale: (params: {
+    id: string; item_id?: string; item_name?: string; 
+    quantity: number; selling_price: number;
+    timestamp: string; exchange_rates?: Record<string, number>;
+  }, performed_by: string) => Promise<void>;
+
+  // Delete Sale
+  deleteSale: (saleId: string, performed_by: string) => Promise<void>;
 
   // Return
   processReturn: (ret: Omit<ReturnRecord, 'id'>, options?: { skipNotifications?: boolean }) => Promise<void>;
@@ -581,11 +731,13 @@ interface AppState {
   clearHistory: () => Promise<void>;
   clearLocationStock: (locationId: string) => Promise<void>;
 
-  // Bulk Deletion
+  // Bulk Deletion & Updates
   deleteLocations: (ids: string[]) => Promise<void>;
   deleteBrands: (ids: string[]) => Promise<void>;
   deleteItems: (ids: string[]) => Promise<void>;
-  deleteContainers: (ids: string[]) => Promise<void>;
+  deleteContainers: (ids: string[], revertStock?: boolean) => Promise<void>;
+  undoDeleteContainer: (snapshotId: string) => Promise<void>;
+  updateBrandPrices: (brandId: string, itemUpdates: { id: string; avg_cost_USD?: number; retail_price?: number; }[]) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -603,6 +755,8 @@ export const useStore = create<AppState>((set, get) => ({
   targets: [],
   transferSessions: [],
   importSessions: [],
+  deletedContainerSnapshots: [],
+  auditLogs: [],
   isSyncingRates: false,
   baseCurrency: localStorage.getItem('777_base_currency') || 'USD',
   isSyncing: false,
@@ -618,7 +772,37 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteImportSession: async (id) => {
-    await deleteDoc(doc(db, 'import_sessions', id));
+    const batch = writeBatch(db);
+    const { importSessions, transactions, inventory } = get();
+    const session = importSessions.find(s => s.id === id);
+
+    if (session) {
+      for (const item of session.items) {
+        const safeLocId = session.location_id.replace(/\//g, '-');
+        const safeItemId = item.item_id.replace(/\//g, '-');
+        const toId = `${safeLocId}_${safeItemId}`;
+        const toEntry = inventory.find(e => e.id === toId);
+
+        if (toEntry) {
+          const qtyToRemove = item.receivedQty || 0;
+          const newQty = Math.max(0, toEntry.quantity - qtyToRemove);
+          const newReceived = Math.max(0, (toEntry.received_balance || 0) - qtyToRemove);
+
+          batch.update(doc(db, 'inventory', toId), {
+            quantity: newQty,
+            received_balance: newReceived
+          });
+        }
+      }
+
+      // Delete matching transactions
+      const txs = transactions.filter(t => t.import_session_id === id);
+      txs.forEach(tx => batch.delete(doc(db, 'transactions', tx.id)));
+    }
+
+    // Delete the session document
+    batch.delete(doc(db, 'import_sessions', id));
+    await batch.commit();
   },
 
   fixImportStock: async (sessionId, fixes) => {
@@ -730,7 +914,7 @@ export const useStore = create<AppState>((set, get) => ({
           const txRef = doc(collection(db, 'transactions'));
           const newTxQty = fix.newQty;
           const unitCost = sItem?.unitCost || 0;
-          batch.set(txRef, {
+          batch.set(txRef, sanitizeForFirestore({
             id: txRef.id,
             type: 'stock_entry',
             from_location: 'supplier',
@@ -744,7 +928,7 @@ export const useStore = create<AppState>((set, get) => ({
             performed_by: 'System Reconcile',
             timestamp: new Date().toISOString(),
             container_id: session.container_id
-          });
+          }));
         }
       }
     }
@@ -776,7 +960,8 @@ export const useStore = create<AppState>((set, get) => ({
     const sessionId = sessionRef.id;
 
     const sessionItems: TransferSessionItem[] = [];
-    const currentDay = new Date().toISOString().split('T')[0];
+    const timestamp = sessionData.date ? new Date(sessionData.date).toISOString() : new Date().toISOString();
+    const currentDay = timestamp.split('T')[0];
 
     for (const sItem of sessionData.items) {
       const item = items.find(i => i.id === sItem.item_id);
@@ -828,21 +1013,21 @@ export const useStore = create<AppState>((set, get) => ({
 
       // Create transaction for transfer
       const txRef = doc(collection(db, 'transactions'));
-      batch.set(txRef, {
+      batch.set(txRef, sanitizeForFirestore({
         id: txRef.id,
         type: 'transfer',
         from_location: sessionData.from_location,
         to_location: sessionData.to_location,
         item_id: sItem.item_id,
-        item_name: item.name,
+        item_name: item.name || 'Unknown Item',
         quantity: sItem.quantity,
         unit_cost: unit_cost_USD,
         currency: 'USD',
         converted_value_USD: unit_cost_USD * sItem.quantity,
         performed_by: sessionData.performed_by,
-        timestamp: new Date().toISOString(),
+        timestamp: timestamp,
         transfer_session_id: sessionId
-      });
+      }));
 
       // Low stock check
       if (newFromQty < item.min_stock_limit) {
@@ -854,7 +1039,7 @@ export const useStore = create<AppState>((set, get) => ({
           message: `⚠️ Low Stock Alert: ${item.name} at ${fromName} is below minimum after transfer (${newFromQty}/${item.min_stock_limit} units).`,
           target_roles: fromTargetRoles,
           status: 'unread',
-          timestamp: new Date().toISOString(),
+          timestamp: timestamp,
           item_id: sItem.item_id
         });
       }
@@ -877,7 +1062,7 @@ export const useStore = create<AppState>((set, get) => ({
       message: `🔄 Transfer Out: ${sessionData.items.length} item types (${sessionData.items.reduce((acc, it) => acc + it.quantity, 0)} units) transferred from ${fromName} → ${toName} by ${sessionData.performed_by}.`,
       target_roles: fromTargetRoles,
       status: 'unread',
-      timestamp: new Date().toISOString(),
+      timestamp: timestamp,
       target_location_id: sessionData.to_location
     });
 
@@ -889,7 +1074,7 @@ export const useStore = create<AppState>((set, get) => ({
       message: `📥 Transfer In: ${sessionData.items.length} item types (${sessionData.items.reduce((acc, it) => acc + it.quantity, 0)} units) received at ${toName} from ${fromName} by ${sessionData.performed_by}.`,
       target_roles: toTargetRoles,
       status: 'unread',
-      timestamp: new Date().toISOString(),
+      timestamp: timestamp,
       target_location_id: sessionData.from_location
     });
 
@@ -897,7 +1082,7 @@ export const useStore = create<AppState>((set, get) => ({
     const totalItems = sessionItems.reduce((acc, it) => acc + it.quantity, 0);
     const transferSession: TransferSession = {
       id: sessionId,
-      date: new Date().toISOString(),
+      date: timestamp,
       from_location: sessionData.from_location,
       to_location: sessionData.to_location,
       itemCount: sessionItems.length,
@@ -920,7 +1105,16 @@ export const useStore = create<AppState>((set, get) => ({
     const session = transferSessions.find(s => s.id === sessionId);
     if (!session) throw new Error('Transfer session not found');
 
-    const updatedSessionItems = [...session.items];
+    // Clean up duplicates in session.items first
+    const cleanSessionItemsMap = new Map<string, TransferSessionItem>();
+    for (const si of session.items) {
+      if (cleanSessionItemsMap.has(si.item_id)) {
+         cleanSessionItemsMap.get(si.item_id)!.quantity += si.quantity;
+      } else {
+         cleanSessionItemsMap.set(si.item_id, { ...si });
+      }
+    }
+    let updatedSessionItems = Array.from(cleanSessionItemsMap.values());
 
     for (const fix of fixes) {
       const fromId = `${session.from_location}_${fix.item_id}`;
@@ -929,12 +1123,13 @@ export const useStore = create<AppState>((set, get) => ({
       const fromEntry = inventory.find(e => e.id === fromId);
       const toEntry = inventory.find(e => e.id === toId);
 
-      const sItem = updatedSessionItems.find(si => si.item_id === fix.item_id);
-      const oldQty = sItem ? sItem.quantity : 0;
+      const sItemIdx = updatedSessionItems.findIndex(si => si.item_id === fix.item_id);
+      const oldQty = sItemIdx >= 0 ? updatedSessionItems[sItemIdx].quantity : 0;
       const diff = fix.newQty - oldQty;
 
       // Recreate item if deleted
       const existingItem = items.find(it => it.id === fix.item_id);
+      const sItem = updatedSessionItems[sItemIdx];
       if (!existingItem && sItem) {
         const brandObj = brands.find(b => b.name.toLowerCase() === sItem.brand.toLowerCase());
         const brandId = brandObj?.id ?? sItem.brand;
@@ -964,10 +1159,10 @@ export const useStore = create<AppState>((set, get) => ({
         received_balance: fromEntry?.received_balance ?? 0,
         supplied_balance: newSupplied,
         returned_balance: fromEntry?.returned_balance ?? 0,
-        avg_cost_USD: fromEntry?.avg_cost_USD ?? 0,
+        avg_cost_USD: fromEntry?.avg_cost_USD ?? (existingItem?.avg_cost_USD ?? 0),
         last_fix_timestamp: new Date().toISOString(),
         fixed_from_transfer_session: sessionId,
-      });
+      }, { merge: true });
 
       // Update Destination Stock
       const currentToQty = toEntry?.quantity ?? 0;
@@ -983,13 +1178,12 @@ export const useStore = create<AppState>((set, get) => ({
         received_balance: newReceived,
         supplied_balance: toEntry?.supplied_balance ?? 0,
         returned_balance: toEntry?.returned_balance ?? 0,
-        avg_cost_USD: toEntry?.avg_cost_USD ?? 0,
+        avg_cost_USD: toEntry?.avg_cost_USD ?? (existingItem?.avg_cost_USD ?? 0),
         last_fix_timestamp: new Date().toISOString(),
         fixed_from_transfer_session: sessionId,
-      });
+      }, { merge: true });
 
       // Update Session item quantity
-      const sItemIdx = updatedSessionItems.findIndex(si => si.item_id === fix.item_id);
       if (sItemIdx !== -1) {
         updatedSessionItems[sItemIdx] = {
           ...updatedSessionItems[sItemIdx],
@@ -1009,20 +1203,34 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
 
-      // Update transaction record
-      const tx = transactions.find(t => t.transfer_session_id === sessionId && t.item_id === fix.item_id && t.type === 'transfer');
-      if (tx) {
-        const newTxQty = Math.max(0, tx.quantity + diff);
-        const newConvertedValue = newTxQty * tx.unit_cost;
-        batch.update(doc(db, 'transactions', tx.id), {
-          quantity: newTxQty,
-          converted_value_USD: newConvertedValue
-        });
-      } else {
+      // Update transaction record, handle duplicates and old transactions missing transfer_session_id
+      let txs = transactions.filter(t => 
+        (t.transfer_session_id === sessionId || 
+         (!t.transfer_session_id && t.timestamp === session.date && t.from_location === session.from_location && t.to_location === session.to_location)) 
+        && t.item_id === fix.item_id 
+        && t.type === 'transfer'
+      );
+      if (txs.length > 0) {
+        const tx = txs[0];
+        const newTxQty = Math.max(0, fix.newQty);
+        if (newTxQty > 0) {
+          const newConvertedValue = newTxQty * tx.unit_cost;
+          batch.update(doc(db, 'transactions', tx.id), {
+            quantity: newTxQty,
+            converted_value_USD: newConvertedValue
+          });
+        } else {
+          batch.delete(doc(db, 'transactions', tx.id));
+        }
+        // Delete duplicate transactions
+        for (let i = 1; i < txs.length; i++) {
+          batch.delete(doc(db, 'transactions', txs[i].id));
+        }
+      } else if (fix.newQty > 0) {
         // Recreate deleted transaction
         const txRef = doc(collection(db, 'transactions'));
         const unitCost = existingItem?.avg_cost_USD ?? 0;
-        batch.set(txRef, {
+        batch.set(txRef, sanitizeForFirestore({
           id: txRef.id,
           type: 'transfer',
           from_location: session.from_location,
@@ -1034,15 +1242,17 @@ export const useStore = create<AppState>((set, get) => ({
           currency: 'USD',
           converted_value_USD: fix.newQty * unitCost,
           performed_by: 'System Reconcile',
-          timestamp: new Date().toISOString(),
+          timestamp: session.date || new Date().toISOString(),
           transfer_session_id: sessionId
-        });
+        }));
       }
     }
 
+    updatedSessionItems = updatedSessionItems.filter(si => si.quantity > 0);
     const updatedTotalItems = updatedSessionItems.reduce((sum, item) => sum + item.quantity, 0);
     batch.update(doc(db, 'transfer_sessions', sessionId), {
       items: updatedSessionItems,
+      itemCount: updatedSessionItems.length,
       totalItems: updatedTotalItems,
       status: 'Reconciled'
     });
@@ -1051,7 +1261,117 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteTransferSession: async (id) => {
-    await deleteDoc(doc(db, 'transfer_sessions', id));
+    const batch = writeBatch(db);
+    const { transferSessions, transactions, inventory } = get();
+    const session = transferSessions.find(s => s.id === id);
+
+    if (session) {
+      for (const item of session.items) {
+        // 1. Revert Source Location
+        const safeFromLocId = session.from_location.replace(/\//g, '-');
+        const safeItemId = item.item_id.replace(/\//g, '-');
+        const fromId = `${safeFromLocId}_${safeItemId}`;
+        const fromEntry = inventory.find(e => e.id === fromId);
+
+        if (fromEntry) {
+          const newFromQty = Math.max(0, fromEntry.quantity + item.quantity);
+          const newSupplied = Math.max(0, (fromEntry.supplied_balance || 0) - item.quantity);
+          batch.update(doc(db, 'inventory', fromId), {
+            quantity: newFromQty,
+            supplied_balance: newSupplied
+          });
+        }
+
+        // 2. Revert Destination Location
+        const safeToLocId = session.to_location.replace(/\//g, '-');
+        const toId = `${safeToLocId}_${safeItemId}`;
+        const toEntry = inventory.find(e => e.id === toId);
+
+        if (toEntry) {
+          const newToQty = Math.max(0, toEntry.quantity - item.quantity);
+          const newReceived = Math.max(0, (toEntry.received_balance || 0) - item.quantity);
+          batch.update(doc(db, 'inventory', toId), {
+            quantity: newToQty,
+            received_balance: newReceived
+          });
+        }
+      }
+
+      // 3. Delete matching transactions
+      const txs = transactions.filter(t => t.transfer_session_id === id);
+      txs.forEach(tx => batch.delete(doc(db, 'transactions', tx.id)));
+    }
+
+    // 4. Delete the session document
+    batch.delete(doc(db, 'transfer_sessions', id));
+    await batch.commit();
+  },
+
+  deleteTransferSessions: async (ids: string[]) => {
+    const { transferSessions, transactions, inventory } = get();
+    
+    // Aggregate inventory deltas
+    const invDeltas = new Map<string, { qty: number, received: number, supplied: number }>();
+    
+    for (const id of ids) {
+      const session = transferSessions.find(s => s.id === id);
+      if (!session) continue;
+      
+      for (const item of session.items) {
+        const safeFromLocId = session.from_location.replace(/\//g, '-');
+        const safeToLocId = session.to_location.replace(/\//g, '-');
+        const safeItemId = item.item_id.replace(/\//g, '-');
+        
+        const fromId = `${safeFromLocId}_${safeItemId}`;
+        const toId = `${safeToLocId}_${safeItemId}`;
+        
+        if (!invDeltas.has(fromId)) invDeltas.set(fromId, { qty: 0, received: 0, supplied: 0 });
+        if (!invDeltas.has(toId)) invDeltas.set(toId, { qty: 0, received: 0, supplied: 0 });
+        
+        // Revert Source (increase qty, decrease supplied)
+        invDeltas.get(fromId)!.qty += item.quantity;
+        invDeltas.get(fromId)!.supplied -= item.quantity;
+        
+        // Revert Destination (decrease qty, decrease received)
+        invDeltas.get(toId)!.qty -= item.quantity;
+        invDeltas.get(toId)!.received -= item.quantity;
+      }
+    }
+    
+    // Commit everything in chunks
+    const allOperations: Function[] = [];
+    
+    invDeltas.forEach((delta, invId) => {
+      const entry = inventory.find(e => e.id === invId);
+      if (entry) {
+        const newQty = Math.max(0, entry.quantity + delta.qty);
+        const newReceived = Math.max(0, (entry.received_balance || 0) + delta.received);
+        const newSupplied = Math.max(0, (entry.supplied_balance || 0) + delta.supplied);
+        
+        allOperations.push((b: any) => {
+          b.update(doc(db, 'inventory', invId), {
+            quantity: newQty,
+            received_balance: newReceived,
+            supplied_balance: newSupplied
+          });
+        });
+      }
+    });
+    
+    ids.forEach(id => {
+      const txs = transactions.filter(t => t.transfer_session_id === id);
+      txs.forEach(tx => {
+        allOperations.push((b: any) => b.delete(doc(db, 'transactions', tx.id)));
+      });
+      allOperations.push((b: any) => b.delete(doc(db, 'transfer_sessions', id)));
+    });
+    
+    // Execute in 500-op chunks
+    for (let i = 0; i < allOperations.length; i += 500) {
+      const b = writeBatch(db);
+      allOperations.slice(i, i + 500).forEach(op => op(b));
+      await b.commit();
+    }
   },
 
   setBaseCurrency: (c) => {
@@ -1109,22 +1429,22 @@ export const useStore = create<AppState>((set, get) => ({
   isTransferModalOpen: false,
   isTransferModalMinimized: false,
   transferForm: { from_location: '', to_location: '', notes: '' },
-  transferItems: [{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }],
+  transferGroups: [{ brand_id: '', _id: Date.now(), items: [{ item_id: '', quantity: 1, _id: Date.now() + 1 }] }],
   
   isRecordSaleModalOpen: false,
   isRecordSaleModalMinimized: false,
   recordSaleLocation: '',
-  recordSaleItems: [{ brand_id: '', item_id: '', quantity: 1, selling_price: 0, currency: 'USD', _id: Date.now() }],
+  recordSaleGroups: [{ brand_id: '', _id: Date.now(), items: [{ item_id: '', quantity: 1, selling_price: 0, currency: 'USD', _id: Date.now() + 1 }] }],
 
   setTransferModalOpen: (v) => set({ isTransferModalOpen: v }),
   setTransferModalMinimized: (v) => set({ isTransferModalMinimized: v }),
   setTransferForm: (f) => set({ transferForm: f }),
-  setTransferItems: (items) => set({ transferItems: items }),
+  setTransferGroups: (groups) => set({ transferGroups: groups }),
 
   setRecordSaleModalOpen: (v) => set({ isRecordSaleModalOpen: v }),
   setRecordSaleModalMinimized: (v) => set({ isRecordSaleModalMinimized: v }),
   setRecordSaleLocation: (v) => set({ recordSaleLocation: v }),
-  setRecordSaleItems: (items) => set({ recordSaleItems: items }),
+  setRecordSaleGroups: (groups) => set({ recordSaleGroups: groups }),
 
   isReturnModalOpen: false,
   isReturnModalMinimized: false,
@@ -1312,6 +1632,9 @@ export const useStore = create<AppState>((set, get) => ({
         allInventory.slice(i, i + 500).forEach(dRef => batch.delete(dRef));
         await batch.commit();
       }
+      
+      const locName = locationId === 'ALL' ? 'All Locations' : get().locations.find(l => l.id === locationId)?.name || locationId;
+      await logAction('clear', 'location', locationId, locName, `Cleared all stock for location ${locName}`);
     } catch (err: any) {
       console.error("[Store] Clear Location Stock Error:", err);
       throw err;
@@ -1364,9 +1687,33 @@ export const useStore = create<AppState>((set, get) => ({
     const ref = doc(collection(db, 'brands'));
     await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...brand }));
     return ref.id;
-  },  updateBrand: async (id: string, updates: Partial<Brand>) => {
+  },
+  updateBrand: async (id: string, updates: Partial<Brand>) => {
+    const st = get();
+    const oldBrand = st.brands.find(b => b.id === id);
+    const oldName = oldBrand?.name;
+    const newName = updates.name;
+
+    const batch = writeBatch(db);
     const bRef = doc(db, 'brands', id);
-    await updateDoc(bRef, updates);
+    batch.update(bRef, updates);
+
+    // If the name changed, cascade the name update to all associated items
+    if (oldName && newName && oldName !== newName) {
+      const itemsToUpdate = st.items.filter(i => i.brand_id === id);
+      itemsToUpdate.forEach(item => {
+        // If the item name contains the old brand name, replace it with the new one.
+        // We use a case-insensitive replacement or just normal replacement.
+        // Usually, the item name starts with the brand name.
+        if (item.name.includes(oldName)) {
+          const newItemName = item.name.replace(oldName, newName);
+          const iRef = doc(db, 'items', item.id);
+          batch.update(iRef, { name: newItemName });
+        }
+      });
+    }
+
+    await batch.commit();
   },
 
   deleteBrand: async (id: string) => {
@@ -1407,14 +1754,20 @@ export const useStore = create<AppState>((set, get) => ({
     await setDoc(ref, sanitizeForFirestore({ id: ref.id, ...item }));
   },
   updateItem: async (id: string, updates: Partial<Item>) => {
+    const currentItem = get().items.find(i => i.id === id);
     if (updates.sku) {
-      const currentItem = get().items.find(i => i.id === id);
       if (currentItem && currentItem.sku.toLowerCase() !== updates.sku.toLowerCase()) {
         const exists = get().items.some(i => i.id !== id && i.sku.toLowerCase() === updates.sku!.toLowerCase());
         if (exists) throw new Error(`An item with SKU "${updates.sku}" already exists.`);
       }
     }
-    await updateDoc(doc(db, 'items', id), sanitizeForFirestore(updates as Record<string, any>));
+    
+    const p1 = updateDoc(doc(db, 'items', id), sanitizeForFirestore(updates as Record<string, any>));
+    const p2 = currentItem 
+      ? logAction('update', 'item', id, currentItem.name, `Updated item details: ${Object.keys(updates).join(', ')}`)
+      : Promise.resolve();
+      
+    await Promise.all([p1, p2]);
   },
   deleteItem: async (id: string) => {
     return get().deleteItems([id]);
@@ -1430,11 +1783,43 @@ export const useStore = create<AppState>((set, get) => ({
 
     const allDocs = [...itemDocs, ...invToDelete, ...txToDelete, ...salesToDelete, ...retToDelete];
 
+    const batchPromises = [];
     for (let i = 0; i < allDocs.length; i += 500) {
       const b = writeBatch(db);
       allDocs.slice(i, i + 500).forEach(ref => b.delete(ref));
-      await b.commit();
+      batchPromises.push(b.commit());
     }
+    
+    // Log deletion concurrently
+    for (const id of ids) {
+      const item = st.items.find(i => i.id === id);
+      if (item) {
+        batchPromises.push(logAction('delete', 'item', id, item.name, `Deleted item ${item.name} and all its inventory records.`));
+      }
+    }
+    await Promise.all(batchPromises);
+  },
+  updateBrandPrices: async (brandId: string, itemUpdates) => {
+    const st = get();
+    const items = st.items.filter(i => i.brand_id === brandId);
+    if (items.length === 0 || itemUpdates.length === 0) return;
+
+    const batchPromises = [];
+    for (let i = 0; i < itemUpdates.length; i += 500) {
+      const b = writeBatch(db);
+      itemUpdates.slice(i, i + 500).forEach(update => {
+        const ref = doc(db, 'items', update.id);
+        const fbUpdates: Partial<Item> = {};
+        if (update.avg_cost_USD !== undefined) fbUpdates.avg_cost_USD = update.avg_cost_USD;
+        if (update.retail_price !== undefined) fbUpdates.retail_price = update.retail_price;
+        
+        if (Object.keys(fbUpdates).length > 0) {
+          b.update(ref, sanitizeForFirestore(fbUpdates));
+        }
+      });
+      batchPromises.push(b.commit());
+    }
+    await Promise.all(batchPromises);
   },
 
   // ── Container ──────────────────────────────────────────────────────────────
@@ -1510,10 +1895,131 @@ export const useStore = create<AppState>((set, get) => ({
     
     await batch.commit();
   },
-  deleteContainers: async (ids: string[]) => {
-    const batch = writeBatch(db);
-    ids.forEach(id => batch.delete(doc(db, 'containers', id)));
-    await batch.commit();
+  deleteContainers: async (ids: string[], revertStock: boolean = false) => {
+    const st = get();
+
+    // Build snapshot BEFORE deletion, to allow undo within 24 hours
+    const deletedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    for (const containerId of ids) {
+      const container = st.containers.find(c => c.id === containerId);
+      const session = st.importSessions.find(s => s.container_id === containerId);
+      const location = session ? st.locations.find(l => l.id === session.location_id) : undefined;
+
+      if (session && session.items && session.items.length > 0) {
+        const snapshotId = `del-${containerId}-${Date.now()}`;
+        const snapshot: DeletedContainerSnapshot = {
+          id: snapshotId,
+          container_no: container?.container_no ?? containerId,
+          deleted_at: deletedAt,
+          expires_at: expiresAt,
+          location_id: session.location_id,
+          location_name: location?.name ?? session.location_id,
+          currency: session.currency ?? 'USD',
+          items: session.items.map(i => ({
+            item_id: i.item_id,
+            item_name: i.item_name,
+            sku: i.sku ?? '',
+            receivedQty: i.receivedQty ?? 0,
+            unitCost: i.unitCost ?? 0,
+          })),
+          total_items_count: session.items.length,
+        };
+        await setDoc(doc(db, 'deleted_container_snapshots', snapshotId), sanitizeForFirestore(snapshot));
+      }
+    }
+
+    // Delete container documents
+    const containerBatch = writeBatch(db);
+    ids.forEach(id => containerBatch.delete(doc(db, 'containers', id)));
+    containerBatch.commit();
+
+    if (revertStock) {
+      const sessions = st.importSessions.filter(s => s.container_id && ids.includes(s.container_id));
+      const invUpdates: { invId: string; qtyToSubtract: number }[] = [];
+
+      sessions.forEach(s => {
+        if (s.items && Array.isArray(s.items)) {
+          s.items.forEach(i => {
+            if (i.item_id && i.receivedQty) {
+              const safeLocId = s.location_id.replace(/\//g, '-');
+              const safeItemId = i.item_id.replace(/\//g, '-');
+              invUpdates.push({
+                invId: `${safeLocId}_${safeItemId}`,
+                qtyToSubtract: i.receivedQty,
+              });
+            }
+          });
+        }
+      });
+
+      if (invUpdates.length > 0) {
+        for (let i = 0; i < invUpdates.length; i += 490) {
+          const chunk = invUpdates.slice(i, i + 490);
+          const b = writeBatch(db);
+          chunk.forEach(({ invId, qtyToSubtract }) => {
+            const existing = st.inventory.find(e => e.id === invId);
+            if (existing) {
+              const newQty = Math.max(0, existing.quantity - qtyToSubtract);
+              b.update(doc(db, 'inventory', invId), { quantity: newQty });
+            }
+          });
+          await b.commit();
+        }
+      }
+
+      // Delete import session records (items stay intact)
+      if (sessions.length > 0) {
+        const sessionBatch = writeBatch(db);
+        sessions.forEach(s => sessionBatch.delete(doc(db, 'import_sessions', s.id)));
+        await sessionBatch.commit();
+      }
+    }
+  },
+
+  undoDeleteContainer: async (snapshotId: string) => {
+    const st = get();
+    const snapshot = st.deletedContainerSnapshots.find(s => s.id === snapshotId);
+    if (!snapshot) throw new Error('Snapshot not found or already expired.');
+
+    // Re-add stock quantities for each item in the snapshot
+    const validItems = snapshot.items.filter(i => i.item_id && i.receivedQty > 0);
+    if (validItems.length > 0) {
+      for (let i = 0; i < validItems.length; i += 490) {
+        const chunk = validItems.slice(i, i + 490);
+        const b = writeBatch(db);
+        chunk.forEach(item => {
+          const safeLocId = snapshot.location_id.replace(/\//g, '-');
+          const safeItemId = item.item_id.replace(/\//g, '-');
+          const invId = `${safeLocId}_${safeItemId}`;
+          const existing = st.inventory.find(e => e.id === invId);
+          const currentQty = existing?.quantity ?? 0;
+          const newQty = currentQty + item.receivedQty;
+          if (existing) {
+            b.update(doc(db, 'inventory', invId), { quantity: newQty });
+          } else {
+            b.set(doc(db, 'inventory', invId), sanitizeForFirestore({
+              id: invId,
+              location_id: snapshot.location_id,
+              item_id: item.item_id,
+              quantity: newQty,
+              avg_cost_USD: toUSD(item.unitCost, snapshot.currency),
+              avg_cost_local: item.unitCost,
+              local_currency: snapshot.currency,
+              opening_balance: 0,
+              received_balance: item.receivedQty,
+              supplied_balance: 0,
+              returned_balance: 0,
+            }));
+          }
+        });
+        await b.commit();
+      }
+    }
+
+    // Delete the snapshot after undo
+    await deleteDoc(doc(db, 'deleted_container_snapshots', snapshotId));
   },
 
   // ── Stock Entry ────────────────────────────────────────────────────────────
@@ -1539,7 +2045,7 @@ export const useStore = create<AppState>((set, get) => ({
       const pendingInventory = new Map<string, { quantity: number; avg_cost_USD: number; avg_cost_local?: number; local_currency?: string }>();
 
       for (const params of chunk) {
-        const { container_id, location_id, item_id, item_name, quantity, unit_cost, currency, is_absolute_override } = params;
+        const { container_id, location_id, item_id, item_name, quantity, unit_cost, currency, is_absolute_override, timestamp: paramTimestamp } = params;
         const avgCostINR = toUSD(unit_cost, currency);
 
         const safeLocId = location_id.replace(/\//g, '-');
@@ -1595,7 +2101,7 @@ export const useStore = create<AppState>((set, get) => ({
             unit_cost_local: unit_cost, local_currency: currency,
             performed_by, container_id: container_id || null,
             notes: is_absolute_override ? 'Stock level override (Import)' : null,
-            timestamp: new Date().toISOString(),
+            timestamp: paramTimestamp ? (paramTimestamp.length === 10 ? paramTimestamp + 'T00:00:00.000Z' : paramTimestamp) : new Date().toISOString(),
           }));
         }
 
@@ -1698,15 +2204,17 @@ export const useStore = create<AppState>((set, get) => ({
         batch.set(doc(db, 'inventory', toId), sanitizeForFirestore(updatedTo));
 
         const txRef = doc(collection(db, 'transactions'));
-        batch.set(txRef, {
+        batch.set(txRef, sanitizeForFirestore({
           id: txRef.id, type: 'transfer',
-          from_location, to_location, item_id, item_name, quantity,
+          from_location, to_location, item_id,
+          item_name: item_name || get().items.find(i => i.id === item_id)?.name || 'Unknown Item',
+          quantity,
           unit_cost: unit_cost_USD, currency: 'USD',
           converted_value_USD: unit_cost_USD * quantity,
-          performed_by,
+          performed_by: performed_by || 'Staff',
           timestamp: new Date().toISOString(),
           container_id: container_id || null
-        });
+        }));
 
         // Helper
         const getLocationName = (id: string) => get().locations.find(l => l.id === id)?.name ?? id;
@@ -1751,7 +2259,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // ── Sale ───────────────────────────────────────────────────────────────────
-  recordSale: async ({ item_id, item_name, location_id, quantity, selling_price, currency, sold_by }, options = {}) => {
+  recordSale: async ({ item_id, item_name: rawItemName, location_id, quantity, selling_price, currency, sold_by, timestamp }, options = {}) => {
+    const item_name = rawItemName || get().items.find(i => i.id === item_id)?.name || 'Unknown Item';
     // FIX: Use transaction lock to prevent overselling
     const lockResource = `inventory_${location_id}_${item_id}`;
     
@@ -1772,28 +2281,41 @@ export const useStore = create<AppState>((set, get) => ({
         last_rollover_date: invEntry.last_rollover_date || currentDay
       }));
 
-      const convertedPriceINR = toUSD(selling_price * quantity, currency);
-      const profitINR = convertedPriceINR - invEntry.avg_cost_USD * quantity;
-      const profitLocal = (selling_price * quantity) - ((invEntry.avg_cost_local ?? invEntry.avg_cost_USD) * quantity);
+      const appliedRates = options.exchange_rates || get().exchangeRates;
+      const convertedPriceINR = toUSD(selling_price * quantity, currency, appliedRates);
+      
+      // EXACT formula: profit = (retail_price_per_unit - unit_cost_USD × exchange_rate) × qty
+      const globalItem = get().items.find(i => i.id === item_id);
+      const saleCostUSD = globalItem?.avg_cost_USD ?? invEntry.avg_cost_USD;
+      const saleCostLocal = globalItem?.avg_cost_local ?? invEntry.avg_cost_local ?? saleCostUSD;
+
+      const unitCostLocal = fromUSD(saleCostUSD, currency, appliedRates); // unit_cost_USD × rate
+      const profitPerUnit = selling_price - unitCostLocal;                 // retail - cost_in_local
+      const profitLocal = profitPerUnit < 0 ? 0 : profitPerUnit * quantity;
+      
+      // Convert local profit back to USD for storage
+      const profitINR = toUSD(profitLocal, currency, appliedRates);
 
       const saleRef = doc(collection(db, 'sales'));
       batch.set(saleRef, sanitizeForFirestore({
         id: saleRef.id, item_id, item_name, location_id, quantity,
         selling_price, currency, converted_price_USD: convertedPriceINR,
-        avg_cost_USD: invEntry.avg_cost_USD, profit_USD: profitINR,
-        avg_cost_local: invEntry.avg_cost_local ?? invEntry.avg_cost_USD,
+        avg_cost_USD: saleCostUSD, profit_USD: profitINR,
+        avg_cost_local: saleCostLocal,
         profit_local: profitLocal, local_currency: invEntry.local_currency ?? 'USD',
-        sold_by, timestamp: new Date().toISOString(),
+        sold_by, timestamp: timestamp || new Date().toISOString(),
+        exchange_rates: appliedRates
       }));
 
       const txRef = doc(collection(db, 'transactions'));
-      batch.set(txRef, {
+      batch.set(txRef, sanitizeForFirestore({
         id: txRef.id, type: 'sale',
         from_location: location_id, to_location: 'customer',
         item_id, item_name, quantity, unit_cost: selling_price, currency,
-        converted_value_USD: convertedPriceINR, performed_by: sold_by,
-        timestamp: new Date().toISOString(),
-      });
+        converted_value_USD: convertedPriceINR, performed_by: sold_by || 'Staff',
+        timestamp: timestamp || new Date().toISOString(),
+        exchange_rates: appliedRates
+      }));
 
       // Sale notification + low stock check
       const item = get().items.find(i => i.id === item_id);
@@ -1840,6 +2362,231 @@ export const useStore = create<AppState>((set, get) => ({
     }, sold_by);
   },
 
+  batchRecordSale: async (sales, options = {}) => {
+    // Process in batches of 400 to stay well under Firestore's 500 limit.
+    const CHUNK_SIZE = 400;
+    const batches = [];
+    
+    // We'll use a local Map to keep track of inventory mutations within this bulk operation
+    // so we don't accidentally oversell if the same item is listed twice in the array.
+    const inventoryMutations = new Map<string, number>();
+
+    for (let i = 0; i < sales.length; i += CHUNK_SIZE) {
+      const chunk = sales.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      const currentDay = new Date().toISOString().split('T')[0];
+      const appliedRates = options.exchange_rates || get().exchangeRates;
+
+      for (const sale of chunk) {
+        const item_name = sale.item_name || get().items.find(it => it.id === sale.item_id)?.name || 'Unknown Item';
+        const invId = `${sale.location_id}_${sale.item_id}`;
+        
+        const invEntry = get().getInventoryAt(sale.location_id, sale.item_id);
+        if (!invEntry) throw new Error(`Insufficient stock for sale of ${item_name}.`);
+        
+        const previousMutatedQty = inventoryMutations.get(invId) ?? invEntry.quantity;
+        if (previousMutatedQty < sale.quantity) {
+           throw new Error(`Insufficient stock for sale of ${item_name}.`);
+        }
+        
+        const newQty = Math.round(previousMutatedQty - sale.quantity);
+        inventoryMutations.set(invId, newQty);
+        
+        batch.set(doc(db, 'inventory', invId), sanitizeForFirestore({ 
+          ...invEntry, 
+          quantity: newQty,
+          supplied_balance: (invEntry.supplied_balance || 0) + sale.quantity,
+          last_rollover_date: invEntry.last_rollover_date || currentDay
+        }));
+
+        const convertedPriceINR = toUSD(sale.selling_price * sale.quantity, sale.currency, appliedRates);
+        const globalItem = get().items.find(it => it.id === sale.item_id);
+        const saleCostUSD = globalItem?.avg_cost_USD ?? invEntry.avg_cost_USD;
+        const saleCostLocal = globalItem?.avg_cost_local ?? invEntry.avg_cost_local ?? saleCostUSD;
+
+        const unitCostLocal = fromUSD(saleCostUSD, sale.currency, appliedRates); 
+        const profitPerUnit = sale.selling_price - unitCostLocal;                 
+        const profitLocal = profitPerUnit < 0 ? 0 : profitPerUnit * sale.quantity;
+        const profitINR = toUSD(profitLocal, sale.currency, appliedRates);
+
+        const saleRef = doc(collection(db, 'sales'));
+        batch.set(saleRef, sanitizeForFirestore({
+          id: saleRef.id, item_id: sale.item_id, item_name, location_id: sale.location_id, quantity: sale.quantity,
+          selling_price: sale.selling_price, currency: sale.currency, converted_price_USD: convertedPriceINR,
+          avg_cost_USD: saleCostUSD, profit_USD: profitINR,
+          avg_cost_local: saleCostLocal,
+          profit_local: profitLocal, local_currency: invEntry.local_currency ?? 'USD',
+          sold_by: sale.sold_by, timestamp: sale.timestamp || new Date().toISOString(),
+          exchange_rates: appliedRates
+        }));
+
+        const txRef = doc(collection(db, 'transactions'));
+        batch.set(txRef, sanitizeForFirestore({
+          id: txRef.id, type: 'sale',
+          from_location: sale.location_id, to_location: 'customer',
+          item_id: sale.item_id, item_name, quantity: sale.quantity, unit_cost: sale.selling_price, currency: sale.currency,
+          converted_value_USD: convertedPriceINR, performed_by: sale.sold_by || 'Staff',
+          timestamp: sale.timestamp || new Date().toISOString(),
+          exchange_rates: appliedRates
+        }));
+      }
+      batches.push(batch);
+    }
+
+    // Commit in parallel groups
+    const PARALLEL = 4;
+    for (let i = 0; i < batches.length; i += PARALLEL) {
+      await Promise.all(batches.slice(i, i + PARALLEL).map(b => b.commit()));
+    }
+  },
+
+  editSale: async ({ id, item_id, item_name, quantity, selling_price, timestamp, exchange_rates }, performed_by) => {
+    const lockResource = `sale_edit_${id}`;
+    return transactionLockManager.executeWithLock(lockResource, async () => {
+      const batch = writeBatch(db);
+      
+      const { sales, inventory, transactions, items } = get();
+      const oldSale = sales.find(s => s.id === id);
+      if (!oldSale) throw new Error('Sale not found');
+
+      const newItemId = item_id || oldSale.item_id;
+      const newItemName = item_name || oldSale.item_name;
+      const isItemChanged = newItemId !== oldSale.item_id;
+
+      const oldInvId = `${oldSale.location_id}_${oldSale.item_id}`;
+      const oldInvEntry = inventory.find(i => i.id === oldInvId);
+      if (!oldInvEntry) throw new Error('Original inventory entry not found');
+
+      let newInvId = oldInvId;
+      let newInvEntry = oldInvEntry;
+
+      if (isItemChanged) {
+        newInvId = `${oldSale.location_id}_${newItemId}`;
+        const found = inventory.find(i => i.id === newInvId);
+        if (!found) throw new Error('New item inventory entry not found in this location');
+        newInvEntry = found;
+
+        if (newInvEntry.quantity < quantity) {
+          throw new Error('Insufficient stock for the new item');
+        }
+
+        // Full refund to old item
+        const updatedOldQty = Math.round(oldInvEntry.quantity + oldSale.quantity);
+        batch.update(doc(db, 'inventory', oldInvId), {
+          quantity: updatedOldQty,
+          supplied_balance: Math.max(0, (oldInvEntry.supplied_balance || 0) - oldSale.quantity)
+        });
+
+        // Full deduct from new item
+        const updatedNewQty = Math.round(newInvEntry.quantity - quantity);
+        batch.update(doc(db, 'inventory', newInvId), {
+          quantity: updatedNewQty,
+          supplied_balance: (newInvEntry.supplied_balance || 0) + quantity
+        });
+      } else {
+        // 1. Calculate qty diff on the same item
+        const qtyDiff = quantity - oldSale.quantity;
+        if (qtyDiff > 0 && oldInvEntry.quantity < qtyDiff) {
+          throw new Error('Insufficient stock to increase sale quantity');
+        }
+
+        // Update inventory
+        const newInvQty = Math.round(oldInvEntry.quantity - qtyDiff);
+        batch.update(doc(db, 'inventory', oldInvId), {
+          quantity: newInvQty,
+          supplied_balance: (oldInvEntry.supplied_balance || 0) + qtyDiff
+        });
+      }
+
+      // Recalculate prices
+      const appliedRates = exchange_rates || oldSale.exchange_rates || get().exchangeRates;
+      const convertedPriceINR = toUSD(selling_price * quantity, oldSale.currency, appliedRates);
+      
+      // Use new item's avg cost if item changed
+      const costUSD = isItemChanged ? (newInvEntry.avg_cost_USD || items.find(i => i.id === newItemId)?.avg_cost_USD || 0) : oldSale.avg_cost_USD;
+      const costLocal = isItemChanged ? (newInvEntry.avg_cost_local ?? costUSD) : (oldSale.avg_cost_local ?? oldSale.avg_cost_USD);
+      
+      // FIXED: Always convert costUSD to sale currency using the applied rates
+      // EXACT formula: profit = (retail_price_per_unit - unit_cost_USD × exchange_rate) × qty
+      const unitCostLocal = fromUSD(costUSD, oldSale.currency, appliedRates);
+      const profitPerUnit = selling_price - unitCostLocal;
+      const profitLocal = profitPerUnit < 0 ? 0 : profitPerUnit * quantity;
+      const profitINR = toUSD(profitLocal, oldSale.currency, appliedRates);
+
+      // Update Sale
+      batch.update(doc(db, 'sales', id), {
+        item_id: newItemId,
+        item_name: newItemName,
+        quantity,
+        selling_price,
+        converted_price_USD: convertedPriceINR,
+        avg_cost_USD: costUSD,
+        avg_cost_local: costLocal,
+        profit_USD: profitINR,
+        profit_local: profitLocal,
+        timestamp,
+        exchange_rates: appliedRates
+      });
+
+      // Find and update the associated transaction
+      const txs = transactions.filter(t => t.type === 'sale' && t.item_id === oldSale.item_id && t.from_location === oldSale.location_id);
+      const tx = txs.find(t => t.timestamp === oldSale.timestamp && t.quantity === oldSale.quantity) || txs.find(t => t.quantity === oldSale.quantity);
+
+      if (tx) {
+        batch.update(doc(db, 'transactions', tx.id), {
+          item_id: newItemId,
+          item_name: newItemName,
+          quantity,
+          unit_cost: selling_price,
+          converted_value_USD: convertedPriceINR,
+          timestamp,
+          exchange_rates: appliedRates
+        });
+      }
+
+      await logAction('update', 'item', oldSale.item_id, oldSale.item_name, `Reconciled sale for ${oldSale.item_name} -> ${newItemName} (${quantity} qty) by ${performed_by}`);
+
+      await batch.commit();
+    });
+  },
+
+  deleteSale: async (saleId: string, performed_by: string) => {
+    const lockResource = `sale_edit_${saleId}`;
+    return transactionLockManager.executeWithLock(lockResource, async () => {
+      const batch = writeBatch(db);
+      
+      const { sales, inventory, transactions } = get();
+      const oldSale = sales.find(s => s.id === saleId);
+      if (!oldSale) throw new Error('Sale not found');
+
+      const invId = `${oldSale.location_id}_${oldSale.item_id}`;
+      const invEntry = inventory.find(i => i.id === invId);
+      if (invEntry) {
+        // Full refund to item
+        const updatedOldQty = Math.round(invEntry.quantity + oldSale.quantity);
+        batch.update(doc(db, 'inventory', invId), {
+          quantity: updatedOldQty,
+          supplied_balance: Math.max(0, (invEntry.supplied_balance || 0) - oldSale.quantity)
+        });
+      }
+
+      // Delete Sale
+      batch.delete(doc(db, 'sales', saleId));
+
+      // Find and delete the associated transaction
+      const txs = transactions.filter(t => t.type === 'sale' && t.item_id === oldSale.item_id && t.from_location === oldSale.location_id);
+      const tx = txs.find(t => t.timestamp === oldSale.timestamp && t.quantity === oldSale.quantity) || txs.find(t => t.quantity === oldSale.quantity);
+
+      if (tx) {
+        batch.delete(doc(db, 'transactions', tx.id));
+      }
+
+      await logAction('delete', 'item', oldSale.item_id, oldSale.item_name, `Deleted sale for ${oldSale.item_name} (${oldSale.quantity} qty) and refunded to inventory by ${performed_by}`);
+
+      await batch.commit();
+    });
+  },
+
   processReturn: async (ret, options = {}) => {
     const lockResource = `inventory_${ret.location_id}_${ret.item_id}`;
     
@@ -1876,21 +2623,23 @@ export const useStore = create<AppState>((set, get) => ({
       const returnCostINR = refSale ? refSale.avg_cost_USD * ret.quantity : 0;
 
       const txRef = doc(collection(db, 'transactions'));
-      batch.set(txRef, {
+      batch.set(txRef, sanitizeForFirestore({
         id: txRef.id, type: 'return',
         from_location: ret.type === 'warehouse_return' ? 'shop' : 'customer',
         to_location: ret.location_id,
-        item_id: ret.item_id, item_name: ret.item_name, quantity: ret.quantity,
+        item_id: ret.item_id,
+        item_name: ret.item_name || get().items.find(i => i.id === ret.item_id)?.name || 'Unknown Item',
+        quantity: ret.quantity,
         unit_cost: returnCostINR, currency: 'USD', converted_value_USD: returnCostINR * ret.quantity,
-        performed_by: 'system',
+        performed_by: ret.performed_by || 'system',
         timestamp: new Date().toISOString(),
-      });
+      }));
 
       await batch.commit();
 
       if (!options?.skipNotifications) {
         await get().createNotification({
-          type: 'return_alert',
+          type: 'return',
           location_id: ret.location_id,
           message: `🔄 Item Returned: ${ret.quantity} units of ${ret.item_name} returned at ${get().locations.find(l => l.id === ret.location_id)?.name} by ${ret.performed_by || 'System'}.`,
           target_roles: ['super_admin', 'admin', 'warehouse_staff', 'shop_staff']
@@ -1981,7 +2730,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ isSyncing: true });
     
     let loadedCollections = 0;
-    const totalCollections = 15;
+    const totalCollections = 16;
     
     const checkSyncComplete = () => {
       loadedCollections++;
@@ -2017,7 +2766,26 @@ export const useStore = create<AppState>((set, get) => ({
       error: err => logError('containers', err)
     });
     onSnapshot(query(collection(db, 'transactions'), orderBy('timestamp', 'desc')), {
-      next: snap => { set({ transactions: snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)) }); checkSyncComplete(); },
+      next: snap => { 
+        const allTxs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction));
+        
+        // Filter out ghost duplicate transfer transactions
+        const validTxs = allTxs.filter(t => {
+          if (t.type !== 'transfer' || t.transfer_session_id) return true;
+          const hasNewerDuplicate = allTxs.some(newer => 
+            newer.type === 'transfer' && 
+            newer.transfer_session_id && 
+            newer.item_id === t.item_id && 
+            newer.from_location === t.from_location && 
+            newer.to_location === t.to_location && 
+            newer.timestamp === t.timestamp
+          );
+          return !hasNewerDuplicate;
+        });
+
+        set({ transactions: validTxs }); 
+        checkSyncComplete(); 
+      },
       error: err => logError('transactions', err)
     });
     onSnapshot(query(collection(db, 'sales'), orderBy('timestamp', 'desc')), {
@@ -2039,23 +2807,11 @@ export const useStore = create<AppState>((set, get) => ({
     onSnapshot(collection(db, 'exchange_rates'), {
       next: snap => {
         const rates: Record<string, number> = {};
-        let needsUpdate = false;
-        const now = Date.now();
-
         snap.forEach(d => {
           const data = d.data();
           if (data.rate) rates[d.id] = data.rate;
-          
-          if (d.id === 'ZMW' && data.lastUpdated) {
-            const lastUpdate = new Date(data.lastUpdated).getTime();
-            // Update rates if older than 12 hours
-            if (now - lastUpdate > 12 * 60 * 60 * 1000) {
-              needsUpdate = true;
-            }
-          }
         });
 
-        // Automatic rate sync has been disabled per user request to allow fully manual rates.
         get().setExchangeRates(rates);
         checkSyncComplete();
       },
@@ -2076,6 +2832,16 @@ export const useStore = create<AppState>((set, get) => ({
     onSnapshot(query(collection(db, 'transfer_sessions'), orderBy('date', 'desc')), {
       next: snap => { set({ transferSessions: snap.docs.map(d => ({ id: d.id, ...d.data() } as TransferSession)) }); checkSyncComplete(); },
       error: err => logError('transfer_sessions', err)
+    });
+    // Listen for deleted container snapshots (24h undo archive)
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    onSnapshot(query(collection(db, 'deleted_container_snapshots'), where('expires_at', '>', oneDayAgo)), {
+      next: snap => { set({ deletedContainerSnapshots: snap.docs.map(d => ({ id: d.id, ...d.data() } as DeletedContainerSnapshot)) }); checkSyncComplete(); },
+      error: err => logError('deleted_container_snapshots', err)
+    });
+    onSnapshot(query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc')), {
+      next: snap => { set({ auditLogs: snap.docs.map(d => ({ id: d.id, ...d.data() } as AuditLog)) }); checkSyncComplete(); },
+      error: err => logError('audit_logs', err)
     });
   },
 }));

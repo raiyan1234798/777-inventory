@@ -18,13 +18,15 @@ export default function Transfers() {
     brands,
     transferSessions,
     deleteTransferSession,
+    deleteTransferSessions,
     setTransferModalOpen,
     setTransferModalMinimized,
     setTransferForm,
-    setTransferItems
+    setTransferGroups
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<'sessions' | 'logs'>('sessions');
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
 
   // Quick Add Item Modal State
   const [showQuickAddItem, setShowQuickAddItem] = useState(false);
@@ -55,10 +57,11 @@ export default function Transfers() {
 
     if (logSearch.trim()) {
       const q = logSearch.toLowerCase().trim();
+      const locationMap = new Map(locations.map(l => [l.id, l]));
       logs = logs.filter(t => {
-        const fromName = locations.find(l => l.id === t.from_location)?.name.toLowerCase() ?? '';
-        const toName = locations.find(l => l.id === t.to_location)?.name.toLowerCase() ?? '';
-        const itemName = t.item_name.toLowerCase();
+        const fromName = (locationMap.get(t.from_location || '')?.name || '').toLowerCase();
+        const toName = (locationMap.get(t.to_location || '')?.name || '').toLowerCase();
+        const itemName = (t.item_name || '').toLowerCase();
         const unitCostStr = t.unit_cost?.toString() || '';
         return fromName.includes(q) || toName.includes(q) || itemName.includes(q) || unitCostStr.includes(q);
       });
@@ -76,7 +79,16 @@ export default function Transfers() {
     setSelectedSession(session);
     setFixModalSearch('');
     
-    const initialFixes = session.items.map((sItem: any, idx: number) => {
+    const aggregatedItems = new Map<string, any>();
+    session.items.forEach((sItem: any) => {
+      if (aggregatedItems.has(sItem.item_id)) {
+        aggregatedItems.get(sItem.item_id).quantity += sItem.quantity;
+      } else {
+        aggregatedItems.set(sItem.item_id, { ...sItem });
+      }
+    });
+
+    const initialFixes = Array.from(aggregatedItems.values()).map((sItem: any, idx: number) => {
       const item = items.find(i => i.id === sItem.item_id);
       
       const sourceInv = inventory.find(inv => inv.location_id === session.from_location && inv.item_id === sItem.item_id);
@@ -172,13 +184,44 @@ export default function Transfers() {
     return sessions;
   }, [transferSessions, sessionSearch, dateFrom, dateTo, locations]);
 
+  const toggleAllSessions = () => {
+    const ids = filteredSessions.map(s => s.id);
+    const allSelected = ids.length > 0 && ids.every(id => selectedSessions.has(id));
+    const next = new Set(selectedSessions);
+    if (allSelected) {
+      ids.forEach(id => next.delete(id));
+    } else {
+      ids.forEach(id => next.add(id));
+    }
+    setSelectedSessions(next);
+  };
+
+  const toggleSession = (id: string) => {
+    const next = new Set(selectedSessions);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedSessions(next);
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedSessions.size === 0) return;
+    if (window.confirm(`Are you sure you want to delete ${selectedSessions.size} selected transfer session(s)? This will revert the stock and delete all associated logs.`)) {
+      try {
+        await deleteTransferSessions(Array.from(selectedSessions));
+        setSelectedSessions(new Set());
+      } catch (err: any) {
+        alert(err.message || 'Failed to delete selected sessions');
+      }
+    }
+  };
+
   const filteredFixItems = useMemo(() => {
     const q = fixModalSearch.trim().toLowerCase();
     if (!q) return fixItems;
     return fixItems.filter(item => 
-      item.item_name.toLowerCase().includes(q) ||
-      item.sku.toLowerCase().includes(q) ||
-      item.brand.toLowerCase().includes(q)
+      (item.item_name || '').toLowerCase().includes(q) ||
+      (item.sku || '').toLowerCase().includes(q) ||
+      (item.brand || '').toLowerCase().includes(q)
     );
   }, [fixItems, fixModalSearch]);
 
@@ -202,7 +245,7 @@ export default function Transfers() {
             setTransferModalOpen(true);
             setTransferModalMinimized(false);
             setTransferForm({ from_location: '', to_location: '' });
-            setTransferItems([{ brand_id: '', item_id: '', quantity: 1, _id: Date.now() }]);
+            setTransferGroups([{ brand_id: '', _id: Date.now(), items: [{ item_id: '', quantity: 1, _id: Date.now() + 1 }] }]);
           }}
           className="btn-primary flex items-center gap-2.5 text-sm justify-center shadow-xl shadow-primary/20 h-12 px-6 self-start sm:self-auto ml-12 sm:ml-0"
         >
@@ -304,6 +347,18 @@ export default function Transfers() {
                 </button>
               )}
             </div>
+            
+            {selectedSessions.size > 0 && (
+              <div className="ml-auto">
+                <button
+                  onClick={handleDeleteSelected}
+                  className="px-4 py-2 bg-red-50 text-red-600 font-bold text-xs uppercase tracking-wider rounded-lg border border-red-100 hover:bg-red-100 transition-colors flex items-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete Selected ({selectedSessions.size})
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Sessions List */}
@@ -312,6 +367,14 @@ export default function Transfers() {
               <table className="w-full text-sm text-left min-w-[800px]">
                 <thead className="bg-gray-50/50 text-[10px] uppercase text-gray-400 font-black tracking-widest">
                   <tr>
+                    <th className="px-4 py-4 w-12 text-center">
+                      <input 
+                        type="checkbox"
+                        className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                        checked={filteredSessions.length > 0 && filteredSessions.every(s => selectedSessions.has(s.id))}
+                        onChange={toggleAllSessions}
+                      />
+                    </th>
                     <th className="px-6 py-4">Date & Time</th>
                     <th className="px-6 py-4">Transfer Ref</th>
                     <th className="px-6 py-4">From (Source)</th>
@@ -326,7 +389,7 @@ export default function Transfers() {
                 <tbody className="divide-y divide-gray-50 bg-white">
                   {filteredSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-6 py-20 text-center flex flex-col items-center justify-center">
+                      <td colSpan={10} className="px-6 py-20 text-center flex flex-col items-center justify-center">
                         <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4 mx-auto">
                           <ArrowRightLeft className="w-8 h-8 opacity-10" />
                         </div>
@@ -337,6 +400,14 @@ export default function Transfers() {
                   ) : (
                     filteredSessions.map((session) => (
                       <tr key={session.id} className="hover:bg-gray-50/50 transition-colors group">
+                        <td className="px-4 py-5 text-center">
+                          <input 
+                            type="checkbox"
+                            className="rounded border-gray-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                            checked={selectedSessions.has(session.id)}
+                            onChange={() => toggleSession(session.id)}
+                          />
+                        </td>
                         <td className="px-6 py-5 font-semibold text-gray-900">
                           <p>{format(new Date(session.date), 'MMM dd, yyyy')}</p>
                           <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest tabular-nums mt-0.5">
@@ -486,7 +557,12 @@ export default function Transfers() {
                         </p>
                       </td>
                       <td className="px-6 py-5">
-                        <p className="text-base font-extrabold text-gray-900 group-hover:text-primary transition-colors tracking-tight">{t.item_name}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-base font-extrabold text-gray-900 group-hover:text-primary transition-colors tracking-tight">{t.item_name}</p>
+                          <span className="text-[9px] bg-gray-100 text-gray-500 font-bold uppercase px-1.5 py-0.5 rounded tracking-widest whitespace-nowrap">
+                            {brands.find(b => b.id === items.find(i => i.id === t.item_id)?.brand_id)?.name || 'Unknown Brand'}
+                          </span>
+                        </div>
                       </td>
                       <td className="px-6 py-5 text-right">
                         <span className="text-lg font-black text-gray-900 tracking-tighter tabular-nums">{t.quantity}</span>
@@ -523,10 +599,15 @@ export default function Transfers() {
                 {[...transferLogs].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).map(t => (
                   <div key={t.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex items-start justify-between gap-2 mb-3">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-bold text-gray-900 text-sm">{t.item_name}</h3>
-                        <p className="text-xs text-gray-500 mt-1">{format(new Date(t.timestamp), 'MMM dd, HH:mm')}</p>
-                      </div>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <h3 className="font-bold text-gray-900 text-sm leading-tight">{t.item_name}</h3>
+                            <span className="text-[9px] bg-gray-100 text-gray-500 font-bold uppercase px-1.5 py-0.5 rounded tracking-widest whitespace-nowrap">
+                              {brands.find(b => b.id === items.find(i => i.id === t.item_id)?.brand_id)?.name || 'Unknown Brand'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-0.5">{format(new Date(t.timestamp), 'MMM dd, HH:mm')}</p>
+                        </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 mb-3">
@@ -699,6 +780,7 @@ export default function Transfers() {
                           const sourceInv = inventory.find(inv => inv.location_id === selectedSession.from_location && inv.item_id === itemId);
                           const destInv = inventory.find(inv => inv.location_id === selectedSession.to_location && inv.item_id === itemId);
                           setFixItems(prev => [{
+                            unique_id: `new_${item.id}_${Date.now()}`,
                             item_id: item.id,
                             item_name: item.name,
                             sku: item.sku || 'No SKU',
@@ -742,7 +824,7 @@ export default function Transfers() {
                     <th className="px-4 py-3 text-center">Transferred</th>
                     <th className="px-4 py-3 text-center">Source Live</th>
                     <th className="px-4 py-3 text-center">Dest Live</th>
-                    <th className="px-4 py-3 text-center" style={{ width: '110px' }}>Actual Received</th>
+                    <th className="px-4 py-3 text-center" style={{ width: '140px' }}>Actual Received</th>
                     <th className="px-4 py-3 text-center">Delta</th>
                   </tr>
                 </thead>
@@ -756,8 +838,9 @@ export default function Transfers() {
                   ) : (
                     filteredFixItems.map((row) => {
                       const hasChanged = row.diff !== 0;
+                      const isError = row.diff > row.sourceLiveQty;
                       return (
-                        <tr key={row.item_id} className={clsx("hover:bg-gray-50/50 transition-colors", hasChanged && "bg-blue-50/30")}>
+                        <tr key={row.item_id} className={clsx("hover:bg-gray-50/50 transition-colors", hasChanged && !isError && "bg-blue-50/30", isError && "bg-red-50/30")}>
                           <td className="px-4 py-3.5">
                             <div className="font-extrabold text-gray-900 flex items-center gap-1.5">
                               {row.item_name}
@@ -770,6 +853,12 @@ export default function Transfers() {
                             <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-0.5">
                               SKU: {row.sku} · {row.brand}
                             </div>
+                            {isError && (
+                              <div className="text-[10px] text-red-600 font-bold mt-1.5 flex items-start gap-1">
+                                <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                                <span>Insufficient source stock. Max allowed: {row.sessionQty + row.sourceLiveQty}</span>
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3.5 text-center font-bold text-gray-900 tabular-nums">
                             {row.sessionQty}
@@ -780,18 +869,27 @@ export default function Transfers() {
                           <td className="px-4 py-3.5 text-center font-bold text-gray-600 tabular-nums">
                             {row.destLiveQty}
                           </td>
-                          <td className="px-4 py-3 text-center">
+                          <td className="px-4 py-3 text-center flex items-center justify-center gap-1">
                             <input
                               type="number"
                               min={0}
                               className={clsx(
                                 "w-20 text-center py-1.5 border rounded-lg font-black text-sm outline-none focus:ring-1 focus:ring-primary tabular-nums",
+                                isError ? "border-red-500 text-red-600 bg-red-50 focus:ring-red-500" :
                                 hasChanged ? "border-primary bg-primary/5 text-primary" : "border-gray-200 text-gray-800 bg-white"
                               )}
                               value={row.newQty}
                               onChange={(e) => handleFixQtyChange(row.unique_id, Number(e.target.value))}
                               title="Received quantity input"
                             />
+                            <button
+                              type="button"
+                              onClick={() => handleFixQtyChange(row.unique_id, 0)}
+                              title="Delete / Refund item entirely"
+                              className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </td>
                           <td className="px-4 py-3.5 text-center font-bold">
                             {row.diff === 0 ? (
@@ -811,8 +909,10 @@ export default function Transfers() {
             </div>
 
             <div className="flex flex-col sm:flex-row items-center justify-between pt-4 border-t border-gray-100 gap-4">
-              <span className="text-xs font-bold text-gray-500">
-                <span className="font-extrabold text-primary">{fixItems.filter(r => r.diff !== 0).length}</span> item(s) adjusted
+              <span className="text-xs font-bold text-gray-500 flex flex-wrap items-center gap-2">
+                <span><span className="font-extrabold text-primary">{fixItems.filter(r => r.diff !== 0).length}</span> item(s) adjusted</span>
+                <span className="text-gray-300">|</span>
+                <span>Total Qty: <span className="font-extrabold text-gray-900 tabular-nums">{fixItems.reduce((sum, item) => sum + item.newQty, 0)}</span></span>
               </span>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -867,9 +967,9 @@ export default function Transfers() {
                 </button>
                 <button
                   type="button"
-                  disabled={fixSaving || fixItems.filter(r => r.diff !== 0).length === 0}
+                  disabled={fixSaving || fixItems.filter(r => r.diff !== 0).length === 0 || fixItems.some(r => r.diff > r.sourceLiveQty)}
                   onClick={handleApplyFixes}
-                  className="btn-primary text-xs h-10 px-6 font-black uppercase tracking-widest shadow-lg shadow-primary/10"
+                  className="btn-primary text-xs h-10 px-6 font-black uppercase tracking-widest shadow-lg shadow-primary/10 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {fixSaving ? 'Applying...' : 'Apply Fixes'}
                 </button>

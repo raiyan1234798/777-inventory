@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useStore, formatCurrency } from '../store';
+import { useStore, formatCurrency , calculateDynamicProfit } from "../store";
 import {
   TrendingUp, TrendingDown, AlertTriangle,
   BarChart2, CheckCircle2, Warehouse, Store,
@@ -16,9 +16,10 @@ type SortField = 'name' | 'stock' | 'min_limit' | 'sold' | 'revenue';
 type SortDir = 'asc' | 'desc';
 
 import { useAuthStore } from '../store/authStore';
+import { sortStockDistribution } from '../lib/stockDistribution';
 
 export default function Insights() {
-  const { inventory, items, sales, transactions, locations, brands, setTransferModalOpen, setTransferForm, setTransferItems } = useStore();
+  const { inventory, items, sales, transactions, locations, brands, setTransferModalOpen, setTransferForm, setTransferGroups } = useStore();
   const { appUser } = useAuthStore();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -66,7 +67,7 @@ export default function Insights() {
         .reduce((sum, e) => sum + e.quantity, 0);
       return { ...loc, qty };
     }).filter(d => d.qty > 0);
-    return { item, distributions };
+    return { item, distributions: sortStockDistribution(distributions) };
   }, [selectedItemId, inventory, items, locations]);
 
   // ─── Core analysis ─────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ export default function Insights() {
         if (!salesMap[s.item_id]) salesMap[s.item_id] = { qty: 0, revenue: 0, profit: 0, orders: 0 };
         salesMap[s.item_id].qty += s.quantity || 0;
         salesMap[s.item_id].revenue += s.converted_price_USD || 0;
-        salesMap[s.item_id].profit += s.profit_USD || 0;
+        salesMap[s.item_id].profit += calculateDynamicProfit(s);
         salesMap[s.item_id].orders += 1;
       }
     });
@@ -122,7 +123,7 @@ export default function Insights() {
     });
 
     const totalRev = sales.reduce((s, sale) => s + (sale.converted_price_USD || 0), 0);
-    const totalProfit = sales.reduce((s, sale) => s + (sale.profit_USD || 0), 0);
+    const totalProfit = sales.reduce((s, sale) => s + (calculateDynamicProfit(sale)), 0);
     const margin = totalRev > 0 ? (totalProfit / totalRev) * 100 : 0;
     const totalStock = itemList.reduce((s, i) => s + i.totalQty, 0);
     const totalSold = itemList.reduce((s, i) => s + i.soldLast30, 0);
@@ -193,7 +194,7 @@ export default function Insights() {
 
   const handleRefillClick = (need: any) => {
     setTransferForm({ from_location: need.whId, to_location: need.shopId });
-    setTransferItems([{ brand_id: need.brandId, item_id: need.itemId, quantity: 1, _id: Date.now() }]);
+    setTransferGroups([{ brand_id: need.brandId, _id: Date.now(), items: [{ item_id: need.itemId, quantity: 1, _id: Date.now() + 1 }] }]);
     setTransferModalOpen(true);
   };
 
@@ -211,14 +212,14 @@ export default function Insights() {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(i =>
-        i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) ||
-        i.brandName.toLowerCase().includes(q) || i.category.toLowerCase().includes(q)
+        (i.name || '').toLowerCase().includes(q) || (i.sku || '').toLowerCase().includes(q) ||
+        (i.brandName || '').toLowerCase().includes(q) || (i.category || '').toLowerCase().includes(q)
       );
     }
     return [...list].sort((a, b) => {
       let cmp = 0;
       switch (sortField) {
-        case 'name': cmp = a.name.localeCompare(b.name); break;
+        case 'name': cmp = (a.name || '').localeCompare(b.name || ''); break;
         case 'stock': cmp = a.totalQty - b.totalQty; break;
         case 'min_limit': cmp = a.stockDiff - b.stockDiff; break;
         case 'sold': cmp = a.soldLast30 - b.soldLast30; break;

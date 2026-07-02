@@ -8,7 +8,7 @@ import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { 
   useStore, COUNTRIES, CURRENCIES, formatCurrency, toUSD 
-} from '../store';
+, calculateDynamicProfit } from "../store";
 import { format } from 'date-fns';
 
 export default function ManageShops() {
@@ -51,7 +51,7 @@ export default function ManageShops() {
       const shopTarget = targets.find(t => t.location_id === shop.id && t.month === now);
       
       const rev = shopSales.reduce((sum, s) => sum + (s.converted_price_USD || 0), 0);
-      const prof = shopSales.reduce((sum, s) => sum + (s.profit_USD || 0), 0);
+      const prof = shopSales.reduce((sum, s) => sum + (calculateDynamicProfit(s)), 0);
       const exp = shopExpenses.reduce((sum, e) => sum + (e.converted_amount_USD || 0), 0);
       
       return {

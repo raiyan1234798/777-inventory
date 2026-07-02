@@ -57,8 +57,8 @@ export default function Users() {
   const filteredUsers = users.filter(u => {
     const matchesRole = !filterRole || u.role === filterRole;
     const matchesSearch = !search || 
-      u.name.toLowerCase().includes(search.toLowerCase()) || 
-      u.email.toLowerCase().includes(search.toLowerCase());
+      (u.name || '').toLowerCase().includes(search.toLowerCase()) || 
+      (u.email || '').toLowerCase().includes(search.toLowerCase());
     return matchesRole && matchesSearch;
   });
 

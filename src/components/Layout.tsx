@@ -17,6 +17,7 @@ import {
   Building2,
   FileText,
   BarChart2,
+  ShieldAlert,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '../store/authStore';
@@ -44,7 +45,9 @@ const navItems: { name: string, path: string, icon: any, group: string, permissi
   { name: 'Reports Archive', path: '/reports', icon: FileText, group: 'FINANCE', permission: 'view_reports' },
 
   { name: 'Manage Shops', path: '/manage-shops', icon: Globe, group: 'ADMIN', permission: 'manage_shops' },
+  { name: 'Notifications', path: '/notifications', icon: Bell, group: 'ADMIN', permission: 'manage_users' },
   { name: 'Control Users', path: '/users', icon: Users, group: 'ADMIN', permission: 'manage_users' },
+  { name: 'Audit Logs', path: '/audit-logs', icon: ShieldAlert, group: 'ADMIN', permission: 'manage_users' },
 ];
 
 export default function Layout() {

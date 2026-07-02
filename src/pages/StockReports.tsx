@@ -3,18 +3,21 @@ import { Download, FileText } from 'lucide-react';
 import { useStore } from '../store';
 import { DataExporter } from '../lib/dataExporter';
 import { exportStockReport, printAllLocationsStockReport } from '../lib/bulkOperations';
+import StockLedgerModal from '../components/StockLedgerModal';
 
 export default function StockReports() {
   const { inventory, locations, items, transactions, sales, returns, brands } = useStore();
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [selectedBrand, setSelectedBrand] = useState<string>('all');
   const today = new Date().toISOString().split('T')[0];
-  const [targetDate, setTargetDate] = useState(today);
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
   const [searchQuery, setSearchQuery] = useState('');
   const [exporting, setExporting] = useState(false);
   const [showEmptyStock, setShowEmptyStock] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
   const [activeMetric, setActiveMetric] = useState<'all' | 'opening' | 'received' | 'supplied' | 'returned' | 'closing'>('all');
+  const [ledgerState, setLedgerState] = useState<{ itemId: string, locationId: string, mode: 'supplied' | 'received' } | null>(null);
 
   // Dynamically pull ALL warehouses and ALL shops — so any future additions appear automatically
   const warehouses = locations.filter(l => l.type === 'warehouse');
@@ -26,14 +29,26 @@ export default function StockReports() {
 
   // ── PRE-COMPUTED AGGREGATIONS FOR O(1) LOOKUP (Major performance boost) ──
   const isOnDate = (timestamp: string) => {
-    return new Date(timestamp).toISOString().split('T')[0] === targetDate;
+    const d = new Date(timestamp).toISOString().split('T')[0];
+    return d >= dateFrom && d <= dateTo;
+  };
+
+  const isAfterDate = (timestamp: string) => {
+    const d = new Date(timestamp).toISOString().split('T')[0];
+    return d > dateTo;
   };
 
   const stockData = useMemo(() => {
     const data = new Map();
+    const containers = useStore.getState().containers;
+
     const getMap = (locId: string, itemId: string) => {
       const key = `${locId}_${itemId}`;
-      if (!data.has(key)) data.set(key, { received: 0, supplied: 0, returned: 0, currentQty: 0 });
+      if (!data.has(key)) data.set(key, { 
+        received: 0, supplied: 0, returned: 0, 
+        receivedAfter: 0, suppliedAfter: 0, returnedAfter: 0,
+        currentQty: 0 
+      });
       return data.get(key);
     };
 
@@ -44,11 +59,24 @@ export default function StockReports() {
 
     // Received / Supplied from Transctions
     transactions.forEach(t => {
-      if (isOnDate(t.timestamp) && (t.type === 'stock_entry' || t.type === 'transfer')) {
-        getMap(t.to_location, t.item_id).received += (t.quantity || 0);
+      // Ignore pending transactions (e.g. from un-reconciled imports)
+      if (t.container_id) {
+        const container = containers.find(c => c.id === t.container_id);
+        if (container?.status === 'Pending') return;
       }
+
+      if (isOnDate(t.timestamp) && (t.type === 'stock_entry' || t.type === 'transfer')) {
+        getMap(t.to_location || t.location_id, t.item_id).received += (t.quantity || 0);
+      }
+      if (isAfterDate(t.timestamp) && (t.type === 'stock_entry' || t.type === 'transfer')) {
+        getMap(t.to_location || t.location_id, t.item_id).receivedAfter += (t.quantity || 0);
+      }
+      
       if (isOnDate(t.timestamp) && t.type === 'transfer') {
         getMap(t.from_location, t.item_id).supplied += (t.quantity || 0);
+      }
+      if (isAfterDate(t.timestamp) && t.type === 'transfer') {
+        getMap(t.from_location, t.item_id).suppliedAfter += (t.quantity || 0);
       }
     });
 
@@ -57,6 +85,9 @@ export default function StockReports() {
       if (isOnDate(s.timestamp)) {
         getMap(s.location_id, s.item_id).supplied += (s.quantity || 0);
       }
+      if (isAfterDate(s.timestamp)) {
+        getMap(s.location_id, s.item_id).suppliedAfter += (s.quantity || 0);
+      }
     });
 
     // Returns
@@ -64,33 +95,44 @@ export default function StockReports() {
       if (isOnDate(r.timestamp) && r.status === 'Restocked') {
          getMap(r.location_id, r.item_id).returned += (r.quantity || 0);
       }
+      if (isAfterDate(r.timestamp) && r.status === 'Restocked') {
+         getMap(r.location_id, r.item_id).returnedAfter += (r.quantity || 0);
+      }
     });
 
     return data;
-  }, [inventory, transactions, sales, returns, targetDate]);
+  }, [inventory, transactions, sales, returns, dateFrom, dateTo]);
 
   const getItemStockRow = (item: typeof items[0], locationId: string) => {
     const invEntry = inventory.find(e => e.location_id === locationId && e.item_id === item.id);
-    const isToday = targetDate === today;
+    const isToday = dateTo === today && dateFrom === today;
     
     // Aggregated metrics from transactions/sales for the TARGET date
-    const metrics = stockData.get(`${locationId}_${item.id}`) || { received: 0, supplied: 0, returned: 0, currentQty: 0 };
-    const { received: txReceived, supplied: txSupplied, returned: txReturned, currentQty: snapshotQty } = metrics;
+    const metrics = stockData.get(`${locationId}_${item.id}`) || { 
+      received: 0, supplied: 0, returned: 0, 
+      receivedAfter: 0, suppliedAfter: 0, returnedAfter: 0,
+      currentQty: 0 
+    };
     
-    let opening = 0;
-    let received = 0;
-    let supplied = 0;
-    let returned = 0;
-    let closing = 0;
+    let { received, supplied, returned, receivedAfter, suppliedAfter, returnedAfter, currentQty } = metrics;
+    
+    // Undo transactions after the target date to get the closing balance on the target date
+    // If I received stock AFTER target date, my currentQty is higher than closing, so subtract it.
+    // If I supplied stock AFTER target date, my currentQty is lower than closing, so add it.
+    // If I returned stock AFTER target date, my currentQty is higher than closing, so subtract it.
+    let closing = currentQty - receivedAfter + suppliedAfter - returnedAfter;
+    if (closing < 0) closing = 0;
 
-    // Use transaction/sales aggregation for accurate metrics for BOTH today and historical
-    opening = snapshotQty - txReceived + txSupplied - txReturned;
-    if (opening < 0) opening = 0;
-    received = txReceived;
-    supplied = txSupplied;
-    returned = txReturned;
-
-    closing = opening + received - supplied + returned;
+    // Opening balance on target date = closing balance on target date MINUS transactions on target date
+    let opening = closing - received + supplied - returned;
+    
+    if (opening < 0) {
+      // User requested to hide negative balances (which happen if they record backdated sales).
+      // To ensure the ledger math still works (Opening + Received - Supplied = Closing)
+      // we add the negative debt to 'supplied' (it was "supplied" to pay off the deficit).
+      supplied += Math.abs(opening);
+      opening = 0;
+    }
 
     return { received, supplied, returned, opening, closing };
   };
@@ -112,6 +154,7 @@ export default function StockReports() {
       itemName: string;
       sku: string;
       locationName: string;
+      brandName: string;
       opening: number;
       received: number;
       supplied: number;
@@ -125,14 +168,14 @@ export default function StockReports() {
         sortedItems.forEach(item => {
           const row = getItemStockRow(item, loc.id);
           if (!showEmptyStock && row.opening === 0 && row.closing === 0 && row.received === 0 && row.supplied === 0 && row.returned === 0) return;
-          rows.push({ slNo: slNo++, itemId: item.id, itemName: item.name || '-', sku: item.sku || '-', locationName: loc.name, ...row });
+          rows.push({ slNo: slNo++, itemId: item.id, itemName: item.name || '-', sku: item.sku || '-', locationName: loc.name, brandName: brands.find(b => b.id === item.brand_id)?.name || '-', ...row });
         });
       });
     } else {
       sortedItems.forEach(item => {
         const row = getItemStockRow(item, selectedLocation);
         if (!showEmptyStock && row.opening === 0 && row.closing === 0 && row.received === 0 && row.supplied === 0 && row.returned === 0) return;
-        rows.push({ slNo: slNo++, itemId: item.id, itemName: item.name || '-', sku: item.sku || '-', locationName: selectedName, ...row });
+        rows.push({ slNo: slNo++, itemId: item.id, itemName: item.name || '-', sku: item.sku || '-', locationName: selectedName, brandName: brands.find(b => b.id === item.brand_id)?.name || '-', ...row });
       });
     }
     return rows;
@@ -166,17 +209,19 @@ export default function StockReports() {
     setSelectedItemIds(next);
   };
 
+  const itemsMap = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
+
   // Summary stats
-  const totalItems = selectedLocation === 'all'
-    ? new Set(inventory.filter(i => selectedBrand === 'all' || items.find(it => it.id === i.item_id)?.brand_id === selectedBrand).map(i => i.item_id)).size
-    : new Set(inventory.filter(i => i.location_id === selectedLocation && (selectedBrand === 'all' || items.find(it => it.id === i.item_id)?.brand_id === selectedBrand)).map(i => i.item_id)).size;
+  const totalItems = useMemo(() => {
+    return selectedLocation === 'all'
+      ? new Set(inventory.filter(i => selectedBrand === 'all' || itemsMap.get(i.item_id)?.brand_id === selectedBrand).map(i => i.item_id)).size
+      : new Set(inventory.filter(i => i.location_id === selectedLocation && (selectedBrand === 'all' || itemsMap.get(i.item_id)?.brand_id === selectedBrand)).map(i => i.item_id)).size;
+  }, [inventory, selectedLocation, selectedBrand, itemsMap]);
   
   const totalOpening = basePreviewRows.reduce((s, r) => s + r.opening, 0);
   const totalReceived = basePreviewRows.reduce((s, r) => s + r.received, 0);
   const totalSupplied = basePreviewRows.reduce((s, r) => s + r.supplied, 0);
   const totalClosingQty = basePreviewRows.reduce((s, r) => s + r.closing, 0);
-
-  const itemsMap = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
   const inventoryValue = inventory
     .filter(inv => selectedLocation === 'all' || inv.location_id === selectedLocation)
     .filter(inv => selectedBrand === 'all' || itemsMap.get(inv.item_id)?.brand_id === selectedBrand)
@@ -189,17 +234,31 @@ export default function StockReports() {
   const handleExcelExport = async () => {
     try {
       setExporting(true);
-      const dateTo = targetDate || today;
-      const filteredItems = selectedItemIds.size > 0 
-        ? sortedItems.filter(i => selectedItemIds.has(i.id))
-        : sortedItems;
+      const dtTo = dateTo || today;
+      const dtFrom = dateFrom || today;
+
+      // If items are manually checked → use those.
+      // If a metric filter is active → use only items visible in the filtered view.
+      // Otherwise → use all sorted (brand/search filtered) items.
+      let filteredItems: typeof items;
+      if (selectedItemIds.size > 0) {
+        filteredItems = sortedItems.filter(i => selectedItemIds.has(i.id));
+      } else if (activeMetric !== 'all') {
+        const visibleIds = new Set(displayedRows.map(r => r.itemId));
+        filteredItems = sortedItems.filter(i => visibleIds.has(i.id));
+      } else {
+        filteredItems = sortedItems;
+      }
 
       await exportStockReport({
         locationId: selectedLocation, 
-        dateTo,
+        dateTo: dtTo,
+        dateFrom: dtFrom,
         inventory, items: filteredItems, locations, transactions, sales, returns, brands,
         format: 'excel',
-        showEmptyStock
+        containers: useStore.getState().containers,
+        // If user explicitly selected items, always print them even if zeros
+        showEmptyStock: selectedItemIds.size > 0 ? true : showEmptyStock
       });
     } catch (err: any) {
       alert('Excel export failed: ' + err.message);
@@ -211,24 +270,37 @@ export default function StockReports() {
   const handlePdfExport = async () => {
     try {
       setExporting(true);
-      const date = targetDate || today;
-      const filteredItems = selectedItemIds.size > 0 
-        ? sortedItems.filter(i => selectedItemIds.has(i.id))
-        : sortedItems;
+      const dtTo = dateTo || today;
+      const dtFrom = dateFrom || today;
+
+      // Same filter logic as Excel
+      let filteredItems: typeof items;
+      if (selectedItemIds.size > 0) {
+        filteredItems = sortedItems.filter(i => selectedItemIds.has(i.id));
+      } else if (activeMetric !== 'all') {
+        const visibleIds = new Set(displayedRows.map(r => r.itemId));
+        filteredItems = sortedItems.filter(i => visibleIds.has(i.id));
+      } else {
+        filteredItems = sortedItems;
+      }
 
       if (selectedLocation === 'all') {
         // Print all locations stock report
         await printAllLocationsStockReport({
-          date, sales, locations, items: filteredItems, brands, inventory, transactions, returns,
-          showEmptyStock
+          dateTo: dtTo, dateFrom: dtFrom, sales, locations, items: filteredItems, brands, inventory, transactions, returns,
+          // If user explicitly selected items, always print them even if zeros
+          showEmptyStock: selectedItemIds.size > 0 ? true : showEmptyStock
         });
       } else {
         await exportStockReport({
           locationId: selectedLocation,
-          dateTo: date,
+          dateTo: dtTo,
+          dateFrom: dtFrom,
           inventory, items: filteredItems, locations, transactions, sales, returns, brands,
           format: 'pdf',
-          showEmptyStock
+          containers: useStore.getState().containers,
+          // If user explicitly selected items, always print them even if zeros
+          showEmptyStock: selectedItemIds.size > 0 ? true : showEmptyStock
         });
       }
     } catch (err: any) {
@@ -313,15 +385,32 @@ export default function StockReports() {
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-gray-600 mb-2">Target Date (Snapshot)</label>
-            <input
-              type="date"
-              value={targetDate}
-              max={today}
-              onChange={(e) => setTargetDate(e.target.value)}
-              className="px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium focus:outline-none focus:border-primary"
-            />
+          <div className="flex gap-2">
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-2">From Date</label>
+              <input
+                type="date"
+                value={dateFrom}
+                max={dateTo}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium focus:outline-none focus:border-primary cursor-pointer"
+                onClick={(e) => { try { e.currentTarget.showPicker(); } catch (err) {} }}
+                onKeyDown={(e) => e.preventDefault()}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-2">To Date</label>
+              <input
+                type="date"
+                value={dateTo}
+                min={dateFrom}
+                max={today}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium focus:outline-none focus:border-primary cursor-pointer"
+                onClick={(e) => { try { e.currentTarget.showPicker(); } catch (err) {} }}
+                onKeyDown={(e) => e.preventDefault()}
+              />
+            </div>
           </div>
           
           <div className="flex items-center gap-2 pb-2.5">
@@ -338,7 +427,7 @@ export default function StockReports() {
           </div>
 
           <button
-            onClick={() => { setTargetDate(today); setSelectedLocation('all'); setSelectedBrand('all'); setSearchQuery(''); setShowEmptyStock(false); setSelectedItemIds(new Set()); }}
+            onClick={() => { setDateFrom(today); setDateTo(today); setSelectedLocation('all'); setSelectedBrand('all'); setSearchQuery(''); setShowEmptyStock(false); setSelectedItemIds(new Set()); }}
             className="px-4 py-2.5 text-sm font-bold text-gray-900 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
           >
             Reset Filters
@@ -389,7 +478,7 @@ export default function StockReports() {
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden shadow-sm">
         <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
           <span className="text-xs font-bold text-gray-600 uppercase tracking-wide">
-            Live Preview — {selectedName} · {new Date(targetDate + 'T00:00:00').toLocaleDateString('en-IN')}
+            Live Preview — {selectedName} · {dateFrom === dateTo ? new Date(dateTo + 'T00:00:00').toLocaleDateString('en-IN') : `${new Date(dateFrom + 'T00:00:00').toLocaleDateString('en-IN')} to ${new Date(dateTo + 'T00:00:00').toLocaleDateString('en-IN')}`}
           </span>
           <span className="text-xs text-gray-400">{displayedRows.length} items</span>
         </div>
@@ -410,6 +499,9 @@ export default function StockReports() {
                 <th className="px-3 py-3 text-center font-bold text-gray-600">CODE #</th>
                 {selectedLocation === 'all' && (
                   <th className="px-3 py-3 text-left font-bold text-gray-600">LOCATION</th>
+                )}
+                {selectedBrand === 'all' && (
+                  <th className="px-3 py-3 text-left font-bold text-orange-500">BRAND</th>
                 )}
                 <th className="px-3 py-3 text-center font-bold text-gray-600">OPENING</th>
                 <th className="px-3 py-3 text-center font-bold text-blue-600">RECEIVED</th>
@@ -435,13 +527,51 @@ export default function StockReports() {
                   {selectedLocation === 'all' && (
                     <td className="px-3 py-2.5 text-gray-500 text-xs">{row.locationName}</td>
                   )}
+                  {selectedBrand === 'all' && (
+                    <td className="px-3 py-2.5 text-xs font-bold text-orange-500">{row.brandName}</td>
+                  )}
                   <td className="px-3 py-2.5 text-center text-gray-700 font-medium">{row.opening}</td>
-                  <td className="px-3 py-2.5 text-center text-blue-700 font-medium">{row.received}</td>
-                  <td className="px-3 py-2.5 text-center text-red-600 font-medium">{row.supplied}</td>
+                  <td className="px-3 py-2.5 text-center text-blue-700 font-medium">
+                    {row.received > 0 ? (
+                      <button onClick={() => setLedgerState({ itemId: row.itemId, locationId: selectedLocation === 'all' ? (locations.find(l => l.name === row.locationName)?.id || '') : selectedLocation, mode: 'received' })} className="hover:underline cursor-pointer">{row.received}</button>
+                    ) : row.received}
+                  </td>
+                  <td className="px-3 py-2.5 text-center text-red-600 font-medium">
+                    {row.supplied > 0 ? (
+                      <button onClick={() => setLedgerState({ itemId: row.itemId, locationId: selectedLocation === 'all' ? (locations.find(l => l.name === row.locationName)?.id || '') : selectedLocation, mode: 'supplied' })} className="hover:underline cursor-pointer">{row.supplied}</button>
+                    ) : row.supplied}
+                  </td>
                   <td className="px-3 py-2.5 text-center text-purple-600 font-medium">{row.returned}</td>
                   <td className="px-3 py-2.5 text-center font-black text-emerald-800 bg-emerald-50">{row.closing}</td>
                 </tr>
               ))}
+              {displayedRows.length > 0 && (() => {
+                const tot = displayedRows.reduce(
+                  (acc, r) => ({
+                    opening: acc.opening + r.opening,
+                    received: acc.received + r.received,
+                    supplied: acc.supplied + r.supplied,
+                    returned: acc.returned + r.returned,
+                    closing: acc.closing + r.closing,
+                  }),
+                  { opening: 0, received: 0, supplied: 0, returned: 0, closing: 0 }
+                );
+                return (
+                  <tr className="bg-gray-100 border-t-2 border-gray-400 font-black text-sm">
+                    <td className="px-3 py-2.5" />
+                    <td className="px-3 py-2.5" />
+                    <td className="px-4 py-2.5 text-gray-800 font-black">TOTAL QTY</td>
+                    <td className="px-3 py-2.5" />
+                    {selectedLocation === 'all' && <td className="px-3 py-2.5" />}
+                    {selectedBrand === 'all' && <td className="px-3 py-2.5" />}
+                    <td className="px-3 py-2.5 text-center text-gray-800">{tot.opening}</td>
+                    <td className="px-3 py-2.5 text-center text-blue-700">{tot.received}</td>
+                    <td className="px-3 py-2.5 text-center text-red-600">{tot.supplied}</td>
+                    <td className="px-3 py-2.5 text-center text-purple-600">{tot.returned}</td>
+                    <td className="px-3 py-2.5 text-center text-emerald-800 bg-emerald-100">{tot.closing}</td>
+                  </tr>
+                );
+              })()}
             </tbody>
           </table>
         </div>
@@ -451,6 +581,16 @@ export default function StockReports() {
           </div>
         )}
       </div>
+
+      <StockLedgerModal
+        isOpen={!!ledgerState}
+        onClose={() => setLedgerState(null)}
+        itemId={ledgerState?.itemId || null}
+        locationId={ledgerState?.locationId || null}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        mode={ledgerState?.mode || null}
+      />
     </div>
   );
 }

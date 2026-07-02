@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useStore, formatCurrency, formatDualCurrency, formatHistoricalDualCurrency } from '../store';
+import { useStore, formatCurrency, formatDualCurrency, formatHistoricalDualCurrency , calculateDynamicProfit } from "../store";
 import { useAuthStore } from '../store/authStore';
 import { format, subDays, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
 import {
@@ -49,7 +49,7 @@ export default function Dashboard() {
 
   const stats = useMemo(() => {
     const totalInventoryValue = inventory.reduce((sum, entry) => sum + (Number(entry.quantity) || 0) * (Number(entry.avg_cost_USD) || 0), 0);
-    const totalProfit = sales.reduce((sum, s) => sum + (Number(s.profit_USD) || 0), 0);
+    const totalProfit = sales.reduce((sum, s) => sum + (calculateDynamicProfit(s)), 0);
     const totalRevenue = sales.reduce((sum, s) => sum + (Number(s.converted_price_USD) || 0), 0);
 
     const lowStockItems = items.filter(item => {
@@ -231,7 +231,7 @@ export default function Dashboard() {
           <div className="mt-8">
             <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Global Asset Value</p>
             <div className="flex items-baseline gap-2 mt-1">
-              <h2 className="text-3xl font-black text-gray-900 tracking-tighter">{formatCurrency(stats.totalInventoryValue)}</h2>
+              <h2 className="text-xl lg:text-2xl font-black text-gray-900 tracking-tighter overflow-hidden tabular-nums">{formatCurrency(stats.totalInventoryValue)}</h2>
               <ArrowUpRight className="w-4 h-4 text-emerald-500" />
             </div>
             <button 
@@ -257,7 +257,7 @@ export default function Dashboard() {
           <div className="mt-8">
             <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Gross Revenue</p>
             <div className="flex items-baseline gap-2 mt-1">
-              <h2 className="text-3xl font-black text-gray-900 tracking-tighter">{formatCurrency(stats.totalRevenue)}</h2>
+              <h2 className="text-xl lg:text-2xl font-black text-gray-900 tracking-tighter overflow-hidden tabular-nums">{formatCurrency(stats.totalRevenue)}</h2>
               <span className="text-[10px] font-black bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full uppercase">+12%</span>
             </div>
             <p className="text-xs text-gray-500 font-bold mt-2 flex items-center gap-2">
@@ -277,7 +277,7 @@ export default function Dashboard() {
           <div className="mt-8">
             <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Net Realized Profit</p>
             <div className="flex items-baseline gap-2 mt-1">
-              <h2 className={clsx("text-3xl font-black tracking-tighter", stats.totalProfit >= 0 ? "text-gray-900" : "text-red-500")}>
+              <h2 className={clsx("text-xl lg:text-2xl font-black tracking-tighter overflow-hidden tabular-nums", stats.totalProfit >= 0 ? "text-gray-900" : "text-red-500")}>
                 {formatCurrency(stats.totalProfit)}
               </h2>
             </div>

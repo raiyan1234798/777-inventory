@@ -76,9 +76,9 @@ export default function Notifications() {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(n =>
-        n.message.toLowerCase().includes(q) ||
-        getLocationName(n.location_id).toLowerCase().includes(q) ||
-        (n.target_location_id && getLocationName(n.target_location_id).toLowerCase().includes(q))
+        (n.message || '').toLowerCase().includes(q) ||
+        (getLocationName(n.location_id) || '').toLowerCase().includes(q) ||
+        (n.target_location_id && (getLocationName(n.target_location_id) || '').toLowerCase().includes(q))
       );
     }
     return result.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());

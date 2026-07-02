@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { RotateCcw, Plus, AlertTriangle, Search, MapPin, Image as ImageIcon, FileUp, X, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
-import { useStore } from '../store';
+import { useStore, hasPermission } from '../store';
+import type { User } from '../store';
 import { useAuthStore } from '../store/authStore';
 import { format } from 'date-fns';
 import clsx from 'clsx';
 
 export default function Returns() {
-  const { hasPermission } = useAuthStore();
+  const { appUser } = useAuthStore();
   const { setReturnModalOpen, setReturnModalMinimized } = useStore();
   const { locations, items, brands, inventory, returns: returnRecords, processReturn } = useStore();
 
@@ -131,7 +132,7 @@ export default function Returns() {
                         </td>
                       </tr>
                     ) : (
-                     [...filteredReturns].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).map(r => (
+                      [...filteredReturns].sort((a,b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()).map(r => (
                       <tr key={r.id} className="hover:bg-gray-50/50 transition-colors group">
                         <td className="px-6 py-5">
                           <p className="font-extrabold text-gray-900 tracking-tight text-base group-hover:text-primary transition-colors">{r.item_name}</p>
@@ -167,7 +168,7 @@ export default function Returns() {
                                <ImageIcon className="w-4 h-4" />
                              </button>
                            )}
-                           {hasPermission('delete') && (
+                           {hasPermission(appUser as User, 'manage_warehouses') && (
                              <button
                                onClick={async () => {
                                  if (window.confirm(`Are you sure you want to delete this return for ${r.item_name}?`)) {
@@ -190,7 +191,7 @@ export default function Returns() {
                           <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">{r.performed_by || 'System/Legacy'}</span>
                         </td>
                         <td className="px-6 py-5 text-gray-400 text-[11px] font-bold tabular-nums">
-                          {format(new Date(r.timestamp), 'MMM dd, yyyy HH:mm')}
+                          {r.timestamp ? format(new Date(r.timestamp), 'MMM dd, yyyy HH:mm') : '—'}
                         </td>
                       </tr>
                     ))
@@ -212,7 +213,7 @@ export default function Returns() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {[...filteredReturns].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).map(r => (
+                  {[...filteredReturns].sort((a,b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()).map(r => (
                     <div key={r.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-all">
                       <div className="flex justify-between items-start gap-2 mb-3">
                         <div className="flex-1 min-w-0">
@@ -250,7 +251,7 @@ export default function Returns() {
                               <ImageIcon className="w-3.5 h-3.5" />
                             </button>
                           )}
-                          {hasPermission('delete') && (
+                          {hasPermission(appUser as User, 'manage_warehouses') && (
                             <button
                               onClick={async () => {
                                 if (window.confirm(`Are you sure you want to delete this return for ${r.item_name}?`)) {
@@ -270,7 +271,7 @@ export default function Returns() {
                         </div>
                         <div className="flex flex-col items-end">
                           <p className="text-gray-900 text-[10px] font-bold uppercase tracking-widest">{r.performed_by || 'System/Legacy'}</p>
-                          <p className="text-gray-400 text-[9px] font-bold">{format(new Date(r.timestamp), 'MMM dd, HH:mm')}</p>
+                          <p className="text-gray-400 text-[9px] font-bold">{r.timestamp ? format(new Date(r.timestamp), 'MMM dd, HH:mm') : '—'}</p>
                         </div>
                       </div>
                     </div>

@@ -1,25 +1,58 @@
-import React, { useState, useCallback, memo } from 'react';
+import React, { useState, useCallback, memo, useEffect, useMemo } from 'react';
 import { useDropzone } from 'react-dropzone';
 import * as XLSX from 'xlsx';
 import Tesseract from 'tesseract.js';
-import { FileText, X, Upload, Store, Search, Trash2, Pencil } from 'lucide-react';
+import { FileText, X, Upload, Store, Search, Trash2, Pencil, AlertCircle } from 'lucide-react';
 import Modal from './Modal';
-import { useStore, CURRENCIES, toUSD, type Brand, type ImportSessionItem } from '../store';
+import { useStore, CURRENCIES, toUSD, fromUSD, type Brand, type ImportSessionItem, sanitizeForFirestore } from '../store';
 import { db } from '../lib/firebase';
 import { collection, doc, writeBatch } from 'firebase/firestore';
-import { generateBrandSKU } from '../lib/skuGenerator';
+import { generateBrandSKU, resolveImportSku } from '../lib/skuGenerator';
+import { extractFlatItems, isFlatStockSheet, isWarehouseStockSheet, dedupeImportItems, ocrTextToRows, countFlatParseExclusions } from '../lib/importParser';
+import {
+  shouldSkipImportItem,
+  shouldReuseExistingPrices,
+  applyPreviewPriceFallback,
+  findExistingItemForImport,
+  findBrandForImport,
+  normalizeBrandFromSheet,
+  normalizeBrandKey,
+  normalizeItemKey,
+  annotateImportPreviewFlags,
+  filterImportPreview,
+} from '../lib/importLogic';
 import { useAuthStore } from '../store/authStore';
 
-const ImportPreviewRow = memo(({ item, idx, importCurrency, onUpdate, onRemove }: any) => {
+const ImportPreviewRow = memo(({ item, idx, importCurrency, importRetailCurrency, onUpdate, onRemove }: any) => {
   return (
-    <tr className="bg-white hover:bg-blue-50/30 transition-colors">
+    <tr className={`bg-white hover:bg-blue-50/30 transition-colors ${item.matchedToSystem ? 'ring-1 ring-inset ring-emerald-100' : ''}`}>
       <td className="py-2 px-3">
         <input id={`imp-name-${idx}`} title="Item Name" placeholder="Item Name" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[11px] w-full focus:ring-1 focus:ring-primary font-medium text-gray-900" 
           value={item.name} onChange={e => onUpdate(idx, 'name', e.target.value)} />
+        <div className="flex flex-wrap gap-1 mt-0.5">
+          {!item.brandUnresolved && item.category && (
+            <span className="text-[9px] text-blue-600 font-bold uppercase">Existing brand</span>
+          )}
+          {item.matchedToSystem && (
+            <span className="text-[9px] text-emerald-600 font-bold uppercase">Catalog match</span>
+          )}
+          {item.brandUnresolved && (
+            <span className="text-[9px] text-amber-600 font-bold uppercase" title="Brand not found in catalog — a new brand will be created on save">New brand</span>
+          )}
+        </div>
       </td>
       <td className="py-2 px-3">
         <input title="SKU" placeholder="Auto-SKU" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[11px] w-full focus:ring-1 focus:ring-blue-400 text-gray-600" 
           value={item.sku} onChange={e => onUpdate(idx, 'sku', e.target.value)} />
+        {item.skuWasGeneratedFromName && (
+          <span
+            className="inline-flex items-center gap-0.5 mt-0.5 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-[9px] font-bold uppercase border border-amber-200"
+            title="No SKU in file — item name was used as the SKU"
+          >
+            <AlertCircle className="w-2.5 h-2.5" />
+            No SKU — using name
+          </span>
+        )}
       </td>
       <td className="py-2 px-3">
         <input title="Brand" placeholder="Brand" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[11px] w-full focus:ring-1 focus:ring-blue-400 text-gray-600" 
@@ -30,12 +63,28 @@ const ImportPreviewRow = memo(({ item, idx, importCurrency, onUpdate, onRemove }
           value={item.qty} onChange={e => onUpdate(idx, 'qty', Number(e.target.value))} />
       </td>
       <td className="py-2 px-3 text-right">
-        <input title="Unit Cost" placeholder="0" type="number" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[11px] w-16 text-right focus:ring-1 focus:ring-gray-400 text-gray-600" 
-          value={item.unitCost} onChange={e => onUpdate(idx, 'unitCost', Number(e.target.value))} />
+        <div className="flex items-center gap-1 justify-end">
+          <input title="Unit Cost" placeholder="0" type="number" step="0.01" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[11px] w-16 text-right focus:ring-1 focus:ring-gray-400 text-gray-600" 
+            value={item.unitCost} onChange={e => onUpdate(idx, 'unitCost', Number(e.target.value))} />
+          <select title="Currency" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[10px] focus:ring-1 focus:ring-gray-400 text-gray-500" value={item.unitCostCurrency || importCurrency} onChange={e => onUpdate(idx, 'unitCostCurrency', e.target.value)}>
+            <option value="USD">USD</option>
+            <option value="ZMW">ZMW</option>
+            <option value="INR">INR</option>
+            <option value="CNY">CNY</option>
+          </select>
+        </div>
       </td>
       <td className="py-2 px-3 text-right">
-        <input title="Retail Price" placeholder="0" type="number" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[11px] w-16 text-right focus:ring-1 focus:ring-emerald-400 text-emerald-600 font-bold" 
-          value={item.retailPrice} onChange={e => onUpdate(idx, 'retailPrice', Number(e.target.value))} />
+        <div className="flex items-center gap-1 justify-end">
+          <input title="Retail Price" placeholder="0" type="number" step="0.01" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[11px] w-16 text-right focus:ring-1 focus:ring-emerald-400 text-emerald-600 font-bold" 
+            value={item.retailPrice} onChange={e => onUpdate(idx, 'retailPrice', Number(e.target.value))} />
+          <select title="Currency" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[10px] focus:ring-1 focus:ring-emerald-400 text-emerald-500" value={item.retailPriceCurrency || importRetailCurrency} onChange={e => onUpdate(idx, 'retailPriceCurrency', e.target.value)}>
+            <option value="USD">USD</option>
+            <option value="ZMW">ZMW</option>
+            <option value="INR">INR</option>
+            <option value="CNY">CNY</option>
+          </select>
+        </div>
       </td>
       <td className="py-2 px-3 text-right">
         <input title="Min Stock Limit" placeholder="10" type="number" className="bg-white border-gray-100 rounded border-0 hover:border p-1 text-[11px] w-12 text-right focus:ring-1 focus:ring-orange-400 text-orange-600 font-bold" 
@@ -75,13 +124,49 @@ export default function GlobalImportModal() {
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [importRetailCurrency, setImportRetailCurrency] = useState<string>('ZMW');
+  const [importMode, setImportMode] = useState<'add_and_update' | 'update_only' | 'add_new_only' | 'update_price_only'>('add_and_update');
+  const [previewSearch, setPreviewSearch] = useState('');
+  const [importDate, setImportDate] = useState(new Date().toISOString().split('T')[0]);
+  const [importContainerNo, setImportContainerNo] = useState('');
+
+  const filteredImportPreview = useMemo(
+    () => filterImportPreview(importPreview, previewSearch),
+    [importPreview, previewSearch]
+  );
+  const isPreviewSearchActive = previewSearch.trim().length > 0;
+
+  // Re-apply system price fallback when catalog loads or import settings change.
+  useEffect(() => {
+    if (importPreview.length === 0 || (brands.length === 0 && items.length === 0)) return;
+    setImportPreview(prev =>
+      annotateImportPreviewFlags(
+        applyPreviewPriceFallback(
+          prev,
+          brands,
+          items,
+          importMode,
+          importCurrency,
+          importRetailCurrency,
+          fromUSD
+        ),
+        brands
+      )
+    );
+  }, [brands.length, items.length, importMode, importCurrency, importRetailCurrency, setImportPreview]);
+
+  useEffect(() => {
+    if (importPreview.length === 0) setPreviewSearch('');
+  }, [importPreview.length]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
       setExcelFile(acceptedFiles[0]);
       setImportExcelFileName(acceptedFiles[0].name);
+      // New file → discard any preview from a previous upload so analysis is fresh.
+      setImportPreview([]);
+      setImportProcessingStatus('');
     }
-  }, [setImportExcelFileName]);
+  }, [setImportExcelFileName, setImportPreview, setImportProcessingStatus]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
     onDrop,
@@ -108,11 +193,11 @@ export default function GlobalImportModal() {
     }
   }, [setImportPreview]);
 
-  const parseStockWarehouseSheet = (rows: any[][], sheetName: string): { name: string; qty: number; unitCost: number; retailPrice: number; sku: string; category: string; brandName: string; code: string; opening: number; received: number; supplied: number; returned: number; closing: number; minStockLimit?: number }[] => {
+  const parseStockWarehouseSheet = (rows: any[][], sheetName: string, fallbackBrand: string): { name: string; qty: number; unitCost: number; retailPrice: number; sku: string; category: string; brandName: string; code: string; opening: number; received: number; supplied: number; returned: number; closing: number; minStockLimit?: number; skuWasGeneratedFromName?: boolean }[] => {
     const results: any[] = [];
 
     // Extract brand name from sheet header rows (rows 1-5) or sheet name
-    let brandName = sheetName.replace(/-SUMM$/i, '').replace(/[-_]/g, ' ').trim();
+    let brandName = normalizeBrandFromSheet(sheetName);
     for (let i = 0; i < Math.min(6, rows.length); i++) {
       const rowStr = (rows[i] || []).map(c => String(c || '').trim()).join(' ').toUpperCase();
       // Look for "BRAND:" or brand name line (after STOCK-WAREHOUSE and before column headers)
@@ -132,6 +217,10 @@ export default function GlobalImportModal() {
     
     // Ensure "BRAND" is fully stripped from the final result just in case
     brandName = brandName.replace(/BRAND/gi, '').trim();
+
+    if (!brandName || /^(SHEET\s*\d+|IMPORT|LIST\s*IMPORT)$/i.test(brandName)) {
+      brandName = fallbackBrand;
+    }
 
     // Find header row with column names
     let headerIdx = -1;
@@ -157,7 +246,8 @@ export default function GlobalImportModal() {
           if (cell.includes('SUPPLIED') || cell === 'SALES' || cell === 'SUPP' || cell.includes('SOLD')) colMap['supplied'] = idx;
           if (cell.includes('RETURNED') || cell === 'RTD' || cell.includes('RETURN')) colMap['returned'] = idx;
           if (cell.includes('CLOSING') || cell === 'CLS' || cell.includes('BALANCE')) colMap['closing'] = idx;
-          if ((cell.includes('COST') || cell.includes('PRICE') || cell === 'COST' || cell === 'PRICE') && !cell.includes('RETAIL')) colMap['unitCost'] = idx;
+          if ((cell.includes('COST') || cell.includes('PRICE') || cell === 'COST') && !cell.includes('RETAIL') && !cell.includes('SELLING')) colMap['unitCost'] = idx;
+          if (cell.includes('SELLING') || cell.includes('RETAIL') || cell === 'SELLING PRICE' || cell === 'RETAIL PRICE') colMap['retailPrice'] = idx;
         });
         break;
       }
@@ -166,19 +256,17 @@ export default function GlobalImportModal() {
     if (headerIdx === -1 || colMap['name'] === undefined) return results;
 
     const { items, brands } = useStore.getState();
-    // Track used SKUs in this sheet and database to avoid duplicates
-    const usedSkus = new Set<string>(items.map(it => it.sku).filter(Boolean));
 
     // Parse data rows
     for (let i = headerIdx + 1; i < rows.length; i++) {
       const row = rows[i] || [];
       const itemNameRaw = String(row[colMap['name']] || '').trim();
-      const codeRaw = String(row[colMap['code']] || '').trim();
+      const codeRaw = colMap['code'] !== undefined ? String(row[colMap['code']] || '').trim() : '';
 
-      let itemName = itemNameRaw;
+      let itemName = itemNameRaw || codeRaw;
       let code = codeRaw;
 
-      // Skip empty, header, or total rows
+      // Skip empty, header, or total rows (after name back-fill from CODE column)
       if (!itemName || itemName.length < 2) continue;
       const upper = itemName.toUpperCase();
       if (['TOTAL', 'GRAND TOTAL', 'TOTAL QTY', 'SL NO', 'DATE', 'PARTICULARS'].some(k => upper === k || upper.startsWith(k + ' '))) continue;
@@ -213,7 +301,8 @@ export default function GlobalImportModal() {
       const supplied = parseNum(colMap['supplied']);
       const returned = parseNum(colMap['returned']);
       const closing = parseNum(colMap['closing']);
-      const unitCost = parseDecimal(colMap['unitCost']);
+      let unitCost = parseDecimal(colMap['unitCost']);
+      let retailPrice = parseDecimal(colMap['retailPrice']);
 
       // Use closing stock as quantity; if 0 or missing, use opening + received - supplied + returned
       let qty = closing;
@@ -235,34 +324,31 @@ export default function GlobalImportModal() {
         code = itemNameRaw.trim();
       }
 
-      // Check if this brand item already exists and has an SKU assigned
-      const matchedBrand = brands.find(b => b.name.trim().toUpperCase() === (finalBrandName || 'Imported').trim().toUpperCase());
-      const existingItem = matchedBrand 
-        ? items.find(it => {
-            if (it.brand_id !== matchedBrand.id) return false;
-            if (it.name.toLowerCase().trim() !== itemName.toLowerCase().trim()) return false;
-            if (code && it.sku.toLowerCase().trim() !== code.toLowerCase().trim()) return false;
-            return true;
-          })
-        : null;
+      const codeFromFile = codeRaw;
+      if (!code) code = itemName; // Fallback SKU to item name
 
-      let skuCode = '';
-      if (existingItem) {
-        skuCode = existingItem.sku;
-      } else {
-        skuCode = generateBrandSKU(finalBrandName || 'Imported', itemName, usedSkus, code);
-      }
+      const skuWasGeneratedFromName = !codeFromFile.trim();
+      const resolvedSku = resolveImportSku(code, itemName);
+
+      // Check if this brand item already exists (brand + name + sku — same as import dedupe)
+      const existingItem = findExistingItemForImport(
+        { name: itemName, sku: resolvedSku, category: finalBrandName || 'Imported' },
+        brands,
+        items
+      );
+
+      const skuCode = existingItem ? existingItem.sku : resolvedSku;
 
       results.push({
         name: itemName, qty: Math.max(qty, 0),
-        unitCost: unitCost, retailPrice: 0, minStockLimit: 0,
+        unitCost: unitCost, retailPrice: retailPrice, minStockLimit: 0,
         sku: skuCode,
         category: finalBrandName || 'Imported',
         brandName: finalBrandName,
         code,
-        opening, received, supplied, returned, closing
+        opening, received, supplied, returned, closing,
+        skuWasGeneratedFromName,
       });
-      usedSkus.add(skuCode);
     }
 
     return results;
@@ -272,25 +358,43 @@ export default function GlobalImportModal() {
     e.preventDefault();
     if (!excelFile || !importTargetLocation) return;
     setIsProcessing(true);
+    setImportPreview([]);
     setImportProcessingStatus('Initialising parser...');
+
+    const getBrandFromFileName = (fileName: string) => {
+      if (!fileName) return 'List Import';
+      let name = fileName.replace(/\.[^/.]+$/, "");
+      name = name.split(/-CONTAINER| CONTAINER|#| - /i)[0];
+      return name.trim().toUpperCase() || 'List Import';
+    };
 
     try {
       let rows: any[][] = [];
       const fileType = excelFile.name.split('.').pop()?.toLowerCase();
       let workbook: XLSX.WorkBook | null = null;
 
+      // Memoize each sheet's parsed rows so a 24-sheet workbook is only parsed
+      // once (the previous code re-parsed sheets across multiple paths).
+      const sheetRowsCache = new Map<string, any[][]>();
+      const getSheetRows = (name: string): any[][] => {
+        const cached = sheetRowsCache.get(name);
+        if (cached) return cached;
+        const parsed = workbook ? XLSX.utils.sheet_to_json<any[]>(workbook.Sheets[name], { header: 1 }) : [];
+        sheetRowsCache.set(name, parsed);
+        return parsed;
+      };
+
       if (fileType === 'xlsx' || fileType === 'xls') {
         setImportProcessingStatus('Reading spreadsheet...');
         const buffer = await excelFile.arrayBuffer();
         workbook = XLSX.read(buffer, { type: 'array' });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        rows = XLSX.utils.sheet_to_json<any[]>(firstSheet, { header: 1 });
+        rows = getSheetRows(workbook.SheetNames[0]);
       } else if (fileType === 'pdf' || fileType?.match(/png|jpg|jpeg/)) {
         setImportProcessingStatus('Performing OCR text extraction...');
         const { data: { text } } = await Tesseract.recognize(excelFile, 'eng', {
           logger: m => m.status === 'recognizing text' ? setImportProcessingStatus(`OCR: ${Math.round(m.progress * 100)}%`) : null
         });
-        rows = text.split('\n').filter(l => l.trim()).map(line => line.split(/\s{2,}|\t/));
+        rows = ocrTextToRows(text);
       }
 
       setImportProcessingStatus('Analyzing structure...');
@@ -299,71 +403,73 @@ export default function GlobalImportModal() {
         opening?: number; received?: number; supplied?: number; returned?: number; closing?: number;
       }[] = [];
 
-      let isMultiSheetStock = false;
-      if (workbook && workbook.SheetNames.length > 1) {
-        const firstSheetStr = rows.slice(0, 8).map(r => (r || []).map((c: any) => String(c || '').toUpperCase()).join(' ')).join(' ');
-        const hasStockHeader = firstSheetStr.includes('STOCK') || firstSheetStr.includes('WAREHOUSE') || firstSheetStr.includes('INVESTMENTS');
-        const hasStockCols = firstSheetStr.includes('OPENING') || firstSheetStr.includes('CLOSING') || firstSheetStr.includes('RECEIVED') || firstSheetStr.includes('SUPPLIED');
-        const brandSheetCount = workbook.SheetNames.filter(n =>
-          n.toUpperCase().includes('SUMM') || n.toUpperCase().includes('SUMMARY') ||
-          (!n.toUpperCase().includes('TOTAL') && n.length > 2)
-        ).length;
-
-        if ((hasStockHeader || hasStockCols) && brandSheetCount >= 1) {
-          isMultiSheetStock = true;
-        }
-      }
-
-      if (isMultiSheetStock && workbook) {
-        setImportProcessingStatus(`Detected multi-brand stock workbook (${workbook.SheetNames.length} sheets)...`);
-
+      // Per-sheet routing: flat list vs warehouse matrix (never force warehouse-only on flat sheets).
+      if (workbook && workbook.SheetNames.length > 0) {
+        setImportProcessingStatus(`Scanning ${workbook.SheetNames.length} sheets...`);
+        let totalExcluded = 0;
         for (let s = 0; s < workbook.SheetNames.length; s++) {
           const sheetName = workbook.SheetNames[s];
+          const sheetRows = getSheetRows(sheetName);
+          if (sheetRows.length < 2) continue;
+
           setImportProcessingStatus(`Reading sheet ${s + 1}/${workbook.SheetNames.length}: ${sheetName}...`);
 
-          const sheet = workbook.Sheets[sheetName];
-          const sheetRows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1 });
-
-          if (sheetRows.length < 3) continue;
-
-          const sheetItems = parseStockWarehouseSheet(sheetRows, sheetName);
-          parsedItems.push(...sheetItems);
-        }
-
-        const deduped = new Map<string, typeof parsedItems[0]>();
-        for (const item of parsedItems) {
-          const codeKey = item.sku ? item.sku.toLowerCase().trim() : '';
-          const key = `${item.name.toLowerCase().trim()}_${codeKey}`;
-          if (deduped.has(key)) {
-            const existing = deduped.get(key)!;
-            existing.qty += item.qty;
-            if (existing.opening !== undefined && item.opening !== undefined &&
-                existing.received !== undefined && item.received !== undefined &&
-                existing.supplied !== undefined && item.supplied !== undefined &&
-                existing.returned !== undefined && item.returned !== undefined &&
-                existing.closing !== undefined && item.closing !== undefined) {
-               existing.opening += item.opening;
-               existing.received += item.received;
-               existing.supplied += item.supplied;
-               existing.returned += item.returned;
-               existing.closing += item.closing;
+          if (isFlatStockSheet(sheetRows)) {
+            const brand = workbook.SheetNames.length > 1
+              ? normalizeBrandFromSheet(sheetName)
+              : getBrandFromFileName(excelFile.name);
+            const stats = countFlatParseExclusions(sheetRows);
+            totalExcluded += stats.dropped;
+            const extracted = extractFlatItems(sheetRows, sheetName, brand);
+            for (const it of extracted) {
+              parsedItems.push({
+                name: it.name, qty: it.qty, closing: it.qty,
+                unitCost: it.unitCost, retailPrice: it.retailPrice, minStockLimit: 0,
+                sku: it.sku, category: brand,
+                skuWasGeneratedFromName: it.skuWasGeneratedFromName,
+              });
             }
-          } else {
-            deduped.set(key, { ...item });
+          } else if (isWarehouseStockSheet(sheetRows)) {
+            const fallbackBrand = getBrandFromFileName(excelFile.name);
+            parsedItems.push(...parseStockWarehouseSheet(sheetRows, sheetName, fallbackBrand));
           }
+
+          // Yield so the UI can refresh during large workbooks (24+ sheets).
+          if (s % 3 === 2) await new Promise<void>(r => setTimeout(r, 0));
         }
-        parsedItems = Array.from(deduped.values());
-        setImportProcessingStatus(`Found ${parsedItems.length} unique items across all brand sheets.`);
+
+        if (parsedItems.length > 0) {
+          const beforeDedup = parsedItems.length;
+          parsedItems = dedupeImportItems(parsedItems);
+          const deduped = beforeDedup - parsedItems.length;
+          const excludeMsg = totalExcluded > 0 ? ` (${totalExcluded} blank/total rows excluded` : '';
+          const dedupMsg = deduped > 0 ? `${excludeMsg ? ',' : ' ('}${deduped} within-brand duplicates merged` : '';
+          const suffix = excludeMsg || dedupMsg ? `${excludeMsg}${dedupMsg}).` : '.';
+          setImportProcessingStatus(`Found ${parsedItems.length} items across ${workbook.SheetNames.length} sheets${suffix}`);
+        }
       }
 
-      else if (!isMultiSheetStock && rows.length > 3) {
+      // OCR / image path: try flat parser on extracted rows when no workbook.
+      if (parsedItems.length === 0 && rows.length > 1 && !workbook && isFlatStockSheet(rows)) {
+        setImportProcessingStatus('Parsing OCR text as flat stock list...');
+        const extracted = extractFlatItems(rows, 'OCR Import', 'OCR Import');
+        parsedItems = extracted.map(it => ({
+          name: it.name, qty: it.qty, closing: it.qty,
+          unitCost: it.unitCost, retailPrice: it.retailPrice, minStockLimit: 0,
+          sku: it.sku, category: it.category,
+          skuWasGeneratedFromName: it.skuWasGeneratedFromName,
+        }));
+      }
+
+      // Fallback parsers when per-sheet routing found nothing (matrix, single warehouse, etc.)
+      if (parsedItems.length === 0 && rows.length > 3) {
         const headerStr = rows.slice(0, 8).map(r => (r || []).map((c: any) => String(c || '').toUpperCase()).join(' ')).join(' ');
         const isSingleStockSheet = (headerStr.includes('OPENING') || headerStr.includes('CLOSING')) &&
           (headerStr.includes('ITEM') || headerStr.includes('DESCRIPTION'));
 
         if (isSingleStockSheet) {
           setImportProcessingStatus('Detected stock warehouse format (single sheet)...');
-          parsedItems = parseStockWarehouseSheet(rows, workbook?.SheetNames[0] || 'Import');
+          parsedItems = parseStockWarehouseSheet(rows, workbook?.SheetNames[0] || 'Import', getBrandFromFileName(excelFile.name));
         } else {
           let isMatrix = false;
           let metricRowIdx = -1;
@@ -423,52 +529,54 @@ export default function GlobalImportModal() {
               seenLedger.add(p.sku);
             });
           } else {
-            setImportProcessingStatus('Parsing Flat List (Smart Detect)...');
-            let nameCol = -1;
-            let qtyCol = -1;
-            let startIdx = 0;
+            setImportProcessingStatus(`Parsing Flat List (Smart Detect) across ${workbook?.SheetNames.length || 1} sheets...`);
 
-            for (let i = 0; i < Math.min(20, rows.length); i++) {
-              const row = (rows[i] || []).map((c: any) => String(c).toUpperCase().trim());
-              let qIdx = row.findIndex((c: string) => ['CLS', 'CLOSING', 'BALANCE'].some(k => c === k || c.startsWith(k)));
-              if (qIdx === -1) qIdx = row.findIndex((c: string) => ['QTY', 'QUANTITY', 'TOTAL', 'REC', 'STOCK'].some(k => c === k || c.startsWith(k)));
+            const processFlatSheet = (sheetRows: any[][], sheetName: string) => {
+              const isMultiSheet = !!(workbook && workbook.SheetNames.length > 1);
+              const brand = isMultiSheet ? normalizeBrandFromSheet(sheetName) : getBrandFromFileName(excelFile.name);
 
-              if (qIdx !== -1) {
-                qtyCol = qIdx;
-                const nIdx = row.findIndex((c: string) => ['ITEM', 'NAME', 'PARTICULAR', 'DESCRIPTION', 'PRODUCT'].some(k => c.includes(k)));
-                nameCol = nIdx !== -1 ? nIdx : 0;
-                startIdx = i + 1;
-                break;
+              const extracted = extractFlatItems(sheetRows, sheetName, brand);
+
+              for (const it of extracted) {
+                parsedItems.push({
+                  name: it.name, qty: it.qty, closing: it.qty,
+                  unitCost: it.unitCost, retailPrice: it.retailPrice, minStockLimit: 0,
+                  sku: it.sku, category: brand,
+                  skuWasGeneratedFromName: it.skuWasGeneratedFromName,
+                });
               }
-            }
+            };
 
-            if (qtyCol === -1) qtyCol = 1;
-            if (nameCol === -1) nameCol = 0;
-
-            const listSkus = new Set<string>();
-
-            for (let i = startIdx; i < rows.length; i++) {
-              const row = rows[i] || [];
-              const pName = String(row[nameCol] || '').trim();
-              const pQty = Math.round(Number(String(row[qtyCol] || '').replace(/[^\d.-]/g, '')));
-
-              if (!pName || isNaN(pQty) || pName.length < 2) continue;
-              if (['DATE', 'PARTICULARS', 'TOTAL', 'GRAND TOTAL'].includes(pName.toUpperCase())) continue;
-
-              const listSku = generateBrandSKU('List', pName, listSkus);
-              listSkus.add(listSku);
-              parsedItems.push({
-                name: pName, qty: pQty,
-                unitCost: 0, retailPrice: 0, minStockLimit: 0,
-                sku: listSku, category: 'List Import'
-              });
+            if (workbook && workbook.SheetNames.length > 0) {
+              for (const sheetName of workbook.SheetNames) {
+                 const sheetRows = getSheetRows(sheetName);
+                 if (sheetRows.length > 1) {
+                    processFlatSheet(sheetRows, sheetName);
+                 }
+              }
+            } else {
+              processFlatSheet(rows, 'Import');
             }
           }
         }
       }
 
+      const { brands: storeBrands, items: storeItems } = useStore.getState();
+      parsedItems = applyPreviewPriceFallback(
+        parsedItems,
+        storeBrands,
+        storeItems,
+        importMode,
+        importCurrency,
+        importRetailCurrency,
+        fromUSD
+      );
+      parsedItems = annotateImportPreviewFlags(parsedItems, storeBrands);
+
+      const noSkuCount = parsedItems.filter(p => p.skuWasGeneratedFromName).length;
+      const noSkuSuffix = noSkuCount > 0 ? ` · ${noSkuCount} without SKU (item name used)` : '';
       setImportPreview(parsedItems);
-      setImportProcessingStatus(`Success! Found ${parsedItems.length} items with Closing Stock values.`);
+      setImportProcessingStatus(`Success! Found ${parsedItems.length} items with Closing Stock values${noSkuSuffix}.`);
     } catch (err: any) {
       console.error(err);
       alert("Parser Error: " + err.message);
@@ -478,29 +586,53 @@ export default function GlobalImportModal() {
   };
 
   const executeFinalImport = async () => {
-    if (!importTargetLocation || importPreview.length === 0) return;
+    if (importPreview.length === 0) {
+      alert('Nothing to import — analyze a file first.');
+      return;
+    }
+    if (!importTargetLocation) {
+      alert('Please select a destination shop/warehouse before saving.');
+      return;
+    }
+
+    const unresolvedBrands = [...new Set(
+      importPreview
+        .filter(p => p.brandUnresolved)
+        .map(p => (p.category || 'Imported').trim())
+    )];
+    if (unresolvedBrands.length > 0) {
+      const proceed = window.confirm(
+        `${unresolvedBrands.length} brand(s) not found in catalog (${unresolvedBrands.slice(0, 3).join(', ')}${unresolvedBrands.length > 3 ? '…' : ''}). ` +
+        'New brand records will be created. Continue?'
+      );
+      if (!proceed) return;
+    }
+
     setImportSaving(true);
     try {
       setImportProcessingStatus('Preparing import...');
 
+      const containerNo = importContainerNo.trim() || `IMP-PRO-${Date.now().toString().slice(-6)}`;
       const containerId = await addContainer({
-        container_no: `IMP-PRO-${Date.now().toString().slice(-6)}`,
+        container_no: containerNo,
         source_country: 'Smart Import',
         total_cost: 0, currency: 'USD', converted_cost_USD: 0,
-        date: new Date().toISOString(),
+        date: importDate.length === 10 ? importDate + 'T00:00:00.000Z' : importDate,
         notes: `Confirmed import with ${importPreview.length} items`,
+        status: 'Received'
       });
 
       setImportProcessingStatus(`Building batches for ${importPreview.length} items...`);
 
       const localItemsMap = new Map<string, any>();
-      const localItemsByNameMap = new Map<string, any>();
       items.forEach(it => {
-        localItemsMap.set(`${it.brand_id}_${it.name.toLowerCase().trim()}_${(it.sku || '').toLowerCase().trim()}`, it);
-        localItemsByNameMap.set(`${it.brand_id}_${it.name.toLowerCase().trim()}`, it);
+        localItemsMap.set(
+          `${it.brand_id}_${normalizeItemKey(it.name)}_${normalizeItemKey(it.sku || '')}`,
+          it
+        );
       });
       const localBrandsMap = new Map<string, any>();
-      brands.forEach(b => localBrandsMap.set(b.name.trim().toUpperCase(), b));
+      brands.forEach(b => localBrandsMap.set(normalizeBrandKey(b.name), b));
 
       // Track SKUs used in this import to avoid duplicates
       const importedSkusSet = new Set<string>(items.map(it => it.sku).filter(Boolean));
@@ -524,18 +656,53 @@ export default function GlobalImportModal() {
 
       let newItemsCreated = 0;
       let existingItemsUpdated = 0;
+      let inventoryRowsWritten = 0;
+      let skippedExisting = 0;
 
       for (const pItem of importPreview) {
-        const incomingCostINR = toUSD(pItem.unitCost, importCurrency);
-        const incomingRetailUSD = toUSD(pItem.retailPrice || 0, importRetailCurrency);
+        const catalogItems = [
+          ...useStore.getState().items,
+          ...Array.from(localItemsMap.values()).filter(
+            (it: { id?: string }) => !useStore.getState().items.some(s => s.id === it.id)
+          ),
+        ];
 
-        const brandNameText = (pItem.category || 'Imported').trim().toUpperCase();
-        let matchedBrand = localBrandsMap.get(brandNameText);
+        const brandNameRaw = (pItem.category || '').trim();
+        if (!brandNameRaw) {
+          throw new Error(`Row "${pItem.name}" has no brand — assign a brand before saving.`);
+        }
+        const brandKey = normalizeBrandKey(brandNameRaw);
+        let matchedBrand = findBrandForImport(pItem.category || 'Imported', brands);
+        if (matchedBrand) {
+          localBrandsMap.set(brandKey, matchedBrand);
+        } else {
+          matchedBrand = localBrandsMap.get(brandKey);
+        }
+        const matchInput = { ...pItem, sku: resolveImportSku(pItem.sku, pItem.name) };
+        let item = findExistingItemForImport(matchInput, brands, catalogItems);
+
+        // "Only New Stocks" skips catalog items already tracked (no inventory write).
+        // "Update Price Only" operates on existing items but does NOT create inventory.
+        if (shouldSkipImportItem(importMode, !!item)) {
+          skippedExisting++;
+          continue;
+        }
+
+        // If in "Update Price Only" mode and item doesn't exist, we skip it.
+        if (importMode === 'update_price_only' && !item) {
+          skippedExisting++;
+          continue;
+        }
+
+        const incomingCostINR = toUSD(pItem.unitCost, pItem.unitCostCurrency || importCurrency);
+        const incomingRetailUSD = toUSD(pItem.retailPrice || 0, pItem.retailPriceCurrency || importRetailCurrency);
+
         let brandId = matchedBrand?.id;
 
         if (!brandId) {
           const bRef = doc(collection(db, 'brands'));
           brandId = bRef.id;
+          const brandNameText = brandNameRaw.toUpperCase();
           if (masterOpCount >= MASTER_CHUNK) {
             allMasterBatches.push(masterBatch);
             masterBatch = writeBatch(db);
@@ -546,25 +713,30 @@ export default function GlobalImportModal() {
           const newBrand = { id: brandId, name: brandNameText, description: 'Auto-imported brand', origin_country: 'Imported' };
           const brandsArr = useStore.getState().brands;
           brandsArr.push(newBrand as Brand);
-          localBrandsMap.set(brandNameText, newBrand);
+          localBrandsMap.set(brandKey, newBrand);
         }
 
-        // Primary matching: Match purely by Brand + Name! Ignore SKU completely to avoid duplicates if SKU changes.
-        let item = localItemsByNameMap.get(`${brandId}_${pItem.name.toLowerCase().trim()}`);
+        // Match by brand + name + sku (same logic as preview fallback).
+        item = findExistingItemForImport(matchInput, useStore.getState().brands, catalogItems);
         
         let itemId = item?.id;
+
+        // When a brand+item match exists, "Only Present Stocks" reuses the system's
+        // existing unit cost / retail price instead of overwriting from the file.
+        const reusePrices = shouldReuseExistingPrices(importMode, !!item);
 
         if (!itemId) {
           const iRef = doc(collection(db, 'items'));
           itemId = iRef.id;
           const newItem = {
             id: itemId, brand_id: brandId || brands[0]?.id || 'imported', name: pItem.name,
-            sku: generateBrandSKU(brandNameText, pItem.name, importedSkusSet, pItem.sku),
+            sku: resolveImportSku(pItem.sku, pItem.name),
             category: pItem.category || 'Imported',
             min_stock_limit: pItem.minStockLimit || 0,
             retail_price: incomingRetailUSD,
             avg_cost_USD: incomingCostINR,
             avg_cost_local: pItem.unitCost || 0,
+            retail_price_local: pItem.retailPrice || 0,
             local_currency: importCurrency
           };
           importedSkusSet.add(newItem.sku);
@@ -575,34 +747,50 @@ export default function GlobalImportModal() {
           }
           masterBatch.set(iRef, newItem);
           masterOpCount++;
-          localItemsMap.set(`${brandId}_${pItem.name.toLowerCase().trim()}_${(newItem.sku || '').toLowerCase().trim()}`, newItem);
+          localItemsMap.set(`${brandId}_${normalizeItemKey(pItem.name)}_${normalizeItemKey(newItem.sku || '')}`, newItem);
           newItemsCreated++;
         } else {
-          const updateData: any = {};
-          if (pItem.retailPrice !== undefined && pItem.retailPrice > 0) updateData.retail_price = incomingRetailUSD;
-          if (incomingCostINR !== undefined && incomingCostINR > 0) {
-            updateData.avg_cost_USD = incomingCostINR;
-            updateData.avg_cost_local = pItem.unitCost || 0;
-            updateData.local_currency = importCurrency;
-          }
-          if (pItem.minStockLimit !== undefined) updateData.min_stock_limit = pItem.minStockLimit;
-          if (brandId) updateData.brand_id = brandId;
-          
-          // Also update the SKU to whatever the new Excel file says, so it corrects old generated SKUs
-          const newSkuCode = generateBrandSKU(brandNameText, pItem.name, importedSkusSet, pItem.sku || pItem.code);
-          if (newSkuCode && newSkuCode !== item.sku) {
-             updateData.sku = newSkuCode;
-             importedSkusSet.add(newSkuCode);
-          }
-          if (Object.keys(updateData).length > 0) {
-            if (masterOpCount >= MASTER_CHUNK) {
-              allMasterBatches.push(masterBatch);
-              masterBatch = writeBatch(db);
-              masterOpCount = 0;
+          // Reuse existing prices for matched items in "Only Present Stocks"; otherwise
+          // refresh them from the file when provided.
+          if (!reusePrices) {
+            const updates: any = {};
+            // For price updates, we overwrite the currency details as well
+            if (pItem.unitCost !== undefined && pItem.unitCost !== item.avg_cost_local) {
+              updates.avg_cost_local = pItem.unitCost;
+              updates.avg_cost_USD = incomingCostINR;
+              updates.local_currency = importCurrency;
             }
-            masterBatch.update(doc(db, 'items', itemId), updateData);
-            masterOpCount++;
-            existingItemsUpdated++;
+            if (pItem.retailPrice !== undefined && incomingRetailUSD !== item.retail_price) {
+              updates.retail_price = incomingRetailUSD;
+              updates.retail_price_local = pItem.retailPrice;
+            }
+            if (pItem.category && pItem.category !== 'Imported' && pItem.category !== item.category) {
+              updates.category = pItem.category;
+            }
+            if (pItem.minStockLimit !== undefined && pItem.minStockLimit !== item.min_stock_limit) {
+              updates.min_stock_limit = pItem.minStockLimit;
+            }
+            if (brandId && brandId !== item.brand_id) {
+              updates.brand_id = brandId;
+            }
+            
+            // Use the SKU from the file verbatim (fall back to item name only when missing).
+            const newSkuCode = resolveImportSku(pItem.sku, pItem.name);
+            if (newSkuCode && newSkuCode !== item.sku) {
+               updates.sku = newSkuCode;
+               importedSkusSet.add(newSkuCode);
+            }
+
+            if (Object.keys(updates).length > 0) {
+              if (masterOpCount >= MASTER_CHUNK) {
+                allMasterBatches.push(masterBatch);
+                masterBatch = writeBatch(db);
+                masterOpCount = 0;
+              }
+              masterBatch.update(doc(db, 'items', itemId), updates);
+              masterOpCount++;
+              existingItemsUpdated++;
+            }
           }
         }
 
@@ -610,34 +798,35 @@ export default function GlobalImportModal() {
         const safeItemId = (itemId as string).replace(/\//g, '-');
         const invId = `${safeLocId}_${safeItemId}`;
         const existing = inventorySnapshot.get(invId);
-        
+
+        // Add the imported quantity to the existing stock
+        const importedQty = Math.max(0, pItem.closing ?? pItem.qty ?? 0);
+        const prevQty = existing?.quantity ?? 0;
+
         let opening = 0;
         let received = 0;
         let supplied = 0;
         let returned = 0;
 
         if (!existing) {
-          const excelClosing = pItem.closing || pItem.qty || 0;
-          opening = excelClosing;
-          received = 0;
-          supplied = 0;
-          returned = 0;
+          opening = 0;
+          received = importedQty;
         } else {
-          opening = existing.quantity || 0;
-          supplied = existing.supplied_balance || 0;
-          returned = existing.returned_balance || 0;
-          
-          const excelClosing = pItem.closing || pItem.qty || opening;
+          opening = existing.opening_balance ?? prevQty;
+          received = importedQty;
           supplied = 0;
           returned = 0;
-          received = Math.max(0, excelClosing - opening);
         }
-        
-        const newQty = opening + received - supplied + returned;
+
+        const newQty = prevQty + importedQty;
         const incomingQtyForAvg = received > 0 ? received : (opening === 0 ? newQty : 0);
         let newAvgUSD = existing?.avg_cost_USD ?? 0;
         let newAvgLocal = existing?.avg_cost_local ?? pItem.unitCost ?? 0;
-        if (incomingQtyForAvg > 0 || (incomingCostINR > 0 && newQty > 0)) {
+        if (reusePrices) {
+          // Matched brand+item in "Only Present Stocks" → call the existing system cost.
+          newAvgUSD = item?.avg_cost_USD ?? existing?.avg_cost_USD ?? newAvgUSD;
+          newAvgLocal = item?.avg_cost_local ?? existing?.avg_cost_local ?? newAvgLocal;
+        } else if (incomingQtyForAvg > 0 || (incomingCostINR > 0 && newQty > 0)) {
            if (incomingCostINR > 0) newAvgUSD = incomingCostINR;
            if (pItem.unitCost && pItem.unitCost > 0) newAvgLocal = pItem.unitCost;
         }
@@ -661,23 +850,35 @@ export default function GlobalImportModal() {
           avg_cost_local: newAvgLocal,
           local_currency: importCurrency
         });
+        inventorySnapshot.set(invId, {
+          ...(existing || {}),
+          id: invId,
+          location_id: importTargetLocation,
+          item_id: itemId,
+          quantity: newQty,
+          opening_balance: opening,
+          received_balance: received,
+          supplied_balance: supplied,
+          returned_balance: returned,
+        });
+        inventoryRowsWritten++;
         invOpCount++;
 
-        const txQty = pItem.closing ?? pItem.qty ?? 0;
-        if (txQty > 0) {
+        const txQty = newQty - prevQty;
+        if (txQty !== 0) {
           const txRef = doc(collection(db, 'transactions'));
           if (invOpCount >= INV_CHUNK) {
             inventoryBatches.push(invBatch);
             invBatch = writeBatch(db);
             invOpCount = 0;
           }
-          invBatch.set(txRef, {
+          invBatch.set(txRef, sanitizeForFirestore({
             id: txRef.id,
             type: 'stock_entry',
             from_location: 'supplier',
             to_location: importTargetLocation,
             item_id: itemId,
-            item_name: pItem.name,
+            item_name: pItem.name || pItem.sku || 'Imported Item',
             quantity: txQty,
             unit_cost: pItem.unitCost || 0,
             currency: importCurrency,
@@ -687,8 +888,8 @@ export default function GlobalImportModal() {
             performed_by: useAuthStore.getState().appUser?.name ?? useAuthStore.getState().user?.displayName ?? 'Admin',
             container_id: containerId,
             notes: 'Imported via Smart Stock Import',
-            timestamp: new Date().toISOString()
-          });
+            timestamp: importDate ? (importDate.length === 10 ? importDate + 'T00:00:00.000Z' : importDate) : new Date().toISOString()
+          }));
           invOpCount++;
         }
 
@@ -704,7 +905,11 @@ export default function GlobalImportModal() {
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
       for (let i = 0; i < allBatches.length; i++) {
-        await allBatches[i].commit();
+        try {
+          await allBatches[i].commit();
+        } catch (batchErr: any) {
+          throw new Error(`Save failed on batch ${i + 1} of ${allBatches.length}: ${batchErr?.message || batchErr}`);
+        }
         setImportProcessingStatus(`Saving... ${i + 1}/${allBatches.length} batches done`);
         if (i < allBatches.length - 1) await sleep(300);
       }
@@ -714,8 +919,9 @@ export default function GlobalImportModal() {
         const brandName = (pItem.category || 'Imported').trim().toUpperCase();
         // Use localBrandsMap (built during this import) — not stale React brands state
         // This ensures newly created brands in this import are resolved correctly
-        const resolvedBrand = localBrandsMap.get(brandName);
-        const resolvedItem = localItemsMap.get(`${resolvedBrand?.id ?? ''}_${pItem.name.toLowerCase().trim()}_${(pItem.sku || '').toLowerCase().trim()}`);
+        const resolvedBrand = findBrandForImport(pItem.category || 'Imported', [...localBrandsMap.values()]) ?? localBrandsMap.get(brandName);
+        const resolvedItem = findExistingItemForImport(pItem, [...localBrandsMap.values()], items)
+          ?? localItemsMap.get(`${resolvedBrand?.id ?? ''}_${(pItem.name || '').toLowerCase().trim()}_${(pItem.sku || '').toLowerCase().trim()}`);
         return {
           item_id: (resolvedItem as any)?.id ?? pItem.name,
           item_name: pItem.name,
@@ -729,7 +935,7 @@ export default function GlobalImportModal() {
       });
 
       await saveImportSession({
-        date: new Date().toISOString(),
+        date: importDate ? (importDate.length === 10 ? importDate + 'T00:00:00.000Z' : importDate) : new Date().toISOString(),
         fileName: importExcelFileName || 'Manual Import',
         location_id: importTargetLocation,
         currency: importCurrency,
@@ -742,7 +948,13 @@ export default function GlobalImportModal() {
       });
       // ──────────────────────────────────────────────────────────────────────
 
-      alert(`Import successful! ${newItemsCreated} new items created, ${existingItemsUpdated} updated.`);
+      const skipNote = skippedExisting > 0 && importMode === 'add_new_only'
+        ? ` · ${skippedExisting} existing item(s) skipped (Only New Stocks mode)`
+        : '';
+      alert(
+        `Import successful! ${newItemsCreated} new item(s), ${existingItemsUpdated} catalog update(s), ` +
+        `${inventoryRowsWritten} inventory row(s) at destination${skipNote}.`
+      );
       setImportPreview([]);
       setImportModalOpen(false);
       setExcelFile(null);
@@ -769,7 +981,7 @@ export default function GlobalImportModal() {
       size="xl"
     >
       <form onSubmit={handleImportExcel} className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="flex flex-col gap-6">
           <div className="space-y-2">
             <label className="label">Source File</label>
             <div 
@@ -784,7 +996,7 @@ export default function GlobalImportModal() {
                     <FileText className="w-6 h-6" />
                   </div>
                   <p className="text-sm font-bold text-gray-900 line-clamp-1">{importExcelFileName}</p>
-                  <button type="button" onClick={(e) => { e.stopPropagation(); setExcelFile(null); setImportExcelFileName(null); }} className="text-[10px] text-red-500 font-bold uppercase mt-2 flex items-center gap-1">
+                  <button type="button" onClick={(e) => { e.stopPropagation(); setExcelFile(null); setImportExcelFileName(null); setImportPreview([]); setImportProcessingStatus(''); }} className="text-[10px] text-red-500 font-bold uppercase mt-2 flex items-center gap-1">
                     <X className="w-3 h-3" /> Remove File
                   </button>
                 </div>
@@ -799,7 +1011,7 @@ export default function GlobalImportModal() {
               )}
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
             <div>
               <label className="label text-gray-900 font-bold flex items-center gap-2">
                  Import Currency
@@ -817,6 +1029,50 @@ export default function GlobalImportModal() {
                 {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
               <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-tighter">Currency for retail prices.</p>
+            </div>
+            <div>
+              <label className="label text-gray-900 font-bold flex items-center gap-2">
+                 Import Mode
+              </label>
+              <select title="Import Mode" className="input-field bg-white shadow-sm" value={importMode} onChange={e => setImportMode(e.target.value as any)}>
+                <option value="add_and_update">New & Present Stocks</option>
+                <option value="update_only">Only Present Stocks</option>
+                <option value="update_price_only">Update Prices & Stocks</option>
+                <option value="add_new_only">Only New Stocks</option>
+              </select>
+              <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-tighter">
+                {importMode === 'add_new_only'
+                  ? 'Skips items already in catalog; no inventory write for those.'
+                  : importMode === 'update_price_only'
+                  ? 'Updates cost/retail globally AND adds stock quantities locally.'
+                  : 'How to handle items.'}
+              </p>
+            </div>
+            <div>
+              <label className="label text-gray-900 font-bold flex items-center gap-2">
+                Stock Date
+              </label>
+              <input
+                type="date"
+                className="input-field bg-white shadow-sm font-bold"
+                value={importDate}
+                max={new Date().toISOString().split('T')[0]}
+                onChange={e => setImportDate(e.target.value)}
+              />
+              <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-tighter">Date stock was received.</p>
+            </div>
+            <div>
+              <label className="label text-gray-900 font-bold flex items-center gap-2">
+                Container / Ref No. (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. IMP-PRO-123456"
+                className="input-field bg-white shadow-sm font-bold"
+                value={importContainerNo}
+                onChange={e => setImportContainerNo(e.target.value)}
+              />
+              <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-tighter">Recognize imports easily.</p>
             </div>
             <div>
               <label className="label text-gray-900 font-bold flex items-center gap-2">
@@ -845,7 +1101,40 @@ export default function GlobalImportModal() {
             <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-500">
               <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                 <p className="font-bold text-gray-900 text-sm flex items-center gap-2"><FileText className="w-4 h-4 text-emerald-500"/> Review Detected Items</p>
-                <p className="text-[10px] text-gray-400 uppercase font-black tracking-widest">{importPreview.length} Items Found</p>
+                <div className="text-right">
+                  <p className="text-[10px] text-gray-400 uppercase font-black tracking-widest">
+                    {isPreviewSearchActive
+                      ? `Showing ${filteredImportPreview.length} of ${importPreview.length} items`
+                      : `${importPreview.length} Items Found`}
+                  </p>
+                  {importPreview.some(p => p.skuWasGeneratedFromName) && (
+                    <p className="text-[10px] text-amber-600 font-bold uppercase tracking-tight">
+                      {importPreview.filter(p => p.skuWasGeneratedFromName).length} without SKU (item name used)
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                <input
+                  type="search"
+                  value={previewSearch}
+                  onChange={e => setPreviewSearch(e.target.value)}
+                  placeholder="Search item name, brand, SKU..."
+                  className="input-field bg-white shadow-sm pl-9 pr-8 py-2 text-xs w-full"
+                  aria-label="Search import preview items"
+                />
+                {previewSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setPreviewSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1 rounded"
+                    title="Clear search"
+                    aria-label="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
                 <table className="w-full text-[11px] text-left">
@@ -855,23 +1144,32 @@ export default function GlobalImportModal() {
                       <th className="py-3 px-3 text-left">SKU</th>
                       <th className="py-3 px-3 text-left">Brand</th>
                       <th className="py-3 px-3 text-right">Qty</th>
-                      <th className="py-3 px-3 text-right">Unit Cost ({importCurrency})</th>
-                      <th className="py-3 px-3 text-right">Retail Price ({importRetailCurrency})</th>
+                      <th className="py-3 px-3 text-right">Unit Cost</th>
+                      <th className="py-3 px-3 text-right">Retail Price</th>
                       <th className="py-3 px-3 text-right">Min Limit</th>
                       <th className="py-3 px-3 text-center">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {importPreview.map((item, idx) => (
-                      <ImportPreviewRow 
-                        key={item.name + idx} 
-                        item={item} 
-                        idx={idx} 
-                        importCurrency={importCurrency}
-                        onUpdate={handleUpdateImportItem}
-                        onRemove={handleRemoveImportItem}
-                      />
-                    ))}
+                    {filteredImportPreview.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="py-8 text-center text-xs text-gray-500">
+                          No items match your search
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredImportPreview.map(({ item, index: idx }) => (
+                        <ImportPreviewRow 
+                          key={item.name + idx} 
+                          item={item} 
+                          idx={idx} 
+                          importCurrency={importCurrency}
+                          importRetailCurrency={importRetailCurrency}
+                          onUpdate={handleUpdateImportItem}
+                          onRemove={handleRemoveImportItem}
+                        />
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -937,7 +1235,7 @@ export default function GlobalImportModal() {
 
         <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
           <button type="button" className="btn-secondary" onClick={() => { setImportModalOpen(false); setImportPreview([]); setExcelFile(null); setImportExcelFileName(null); }}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={importSaving || !importExcelFileName || importPreview.length > 0}>{importSaving ? 'Processing…' : 'Analyze & Preview'}</button>
+          <button type="submit" className="btn-primary" disabled={importSaving || !importExcelFileName || isProcessing}>{importSaving ? 'Processing…' : importPreview.length > 0 ? 'Re-Analyze File' : 'Analyze & Preview'}</button>
         </div>
       </form>
     </Modal>

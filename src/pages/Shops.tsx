@@ -2,9 +2,11 @@ import { useState, useMemo } from 'react';
 import { ShoppingCart, TrendingUp, Search, Store, AlertTriangle, Globe, ChevronRight, Activity, Plus, Trash2, Warehouse, FileText } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Modal from '../components/Modal';
-import { useStore, CURRENCIES, formatCurrency, formatDualCurrency, formatHistoricalDualCurrency, toUSD, type InventoryEntry, type Item, type Location } from '../store';
+import { useStore, CURRENCIES, formatCurrency, formatUnitCost, formatDualCurrency, formatHistoricalDualCurrency, toUSD, type InventoryEntry, type Item, type Location , calculateDynamicProfit } from "../store";
 import { useAuthStore } from '../store/authStore';
 import { exportDailySalesReport } from '../lib/bulkOperations';
+import { sortStockDistribution } from '../lib/stockDistribution';
+import { matchesItemSearch } from '../lib/searchUtils';
 import { format } from 'date-fns';
 import clsx from 'clsx';
 
@@ -12,7 +14,8 @@ type ShopRow = InventoryEntry & { item: Item; loc: Location; isLow: boolean };
 
 export default function Shops() {
   const { appUser } = useAuthStore();
-  const { locations, items, inventory, sales, recordSale, brands, transactions, setRecordSaleModalOpen, setRecordSaleModalMinimized, setRecordSaleLocation, setRecordSaleItems } = useStore();
+  const { locations, items, inventory, sales, recordSale, brands, transactions, setRecordSaleModalOpen, setRecordSaleModalMinimized, setRecordSaleLocation, setRecordSaleItems, baseCurrency } = useStore();
+  const activeBase = baseCurrency || 'USD';
   const [exporting, setExporting] = useState(false);
 
   const shops = locations.filter(l => l.type === 'shop');
@@ -32,7 +35,7 @@ export default function Shops() {
         .reduce((sum, e) => sum + e.quantity, 0);
       return { ...loc, qty };
     }).filter(d => d.qty > 0);
-    return { item, distributions };
+    return { item, distributions: sortStockDistribution(distributions) };
   }, [selectedItemId, inventory, items, locations]);
 
   const shopInventoryRows = useMemo((): ShopRow[] => {
@@ -43,12 +46,12 @@ export default function Shops() {
       const item = items.find(i => i.id === entry.item_id);
       const loc = locations.find(l => l.id === entry.location_id);
       if (!item || !loc) continue;
-      const q = search.toLowerCase();
-      if (q && !item.name.toLowerCase().includes(q) && !loc.name.toLowerCase().includes(q)) continue;
+      const brandName = brands.find(b => b.id === item.brand_id)?.name;
+      if (search && !matchesItemSearch([item.name, item.sku, brandName, loc.name], search)) continue;
       rows.push({ ...entry, item, loc, isLow: entry.quantity < (item.min_stock_limit ?? 0) });
     }
     return rows;
-  }, [inventory, items, locations, shops, filterShop, search]);
+  }, [inventory, items, locations, shops, filterShop, search, brands]);
 
   // Sales stats
   const now = new Date();
@@ -58,7 +61,7 @@ export default function Shops() {
   const daySales = sales.filter(s => s.timestamp >= startOfDay);
   const monthSales = sales.filter(s => s.timestamp >= startOfMonth);
 
-  const monthProfit = monthSales.reduce((s, x) => s + (x.profit_USD || 0), 0);
+  const monthProfit = monthSales.reduce((s, x) => s + (calculateDynamicProfit(x)), 0);
   const dayRevenue = daySales.reduce((s, x) => s + (x.converted_price_USD || 0), 0);
   const filteredSales = filterShop
     ? sales.filter(s => s.location_id === filterShop)
@@ -150,7 +153,7 @@ export default function Shops() {
         <div className="card border-0 shadow-lg shadow-gray-50 bg-gradient-to-br from-white to-gray-200/20 p-6 flex flex-col justify-between sm:col-span-2 lg:col-span-1">
           <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Total Profit</p>
           <div>
-            <p className="text-3xl font-black text-emerald-600 tracking-tighter tabular-nums">{formatCurrency(sales.reduce((s, x) => s + (x.profit_USD || 0), 0))}</p>
+            <p className="text-3xl font-black text-emerald-600 tracking-tighter tabular-nums">{formatCurrency(sales.reduce((s, x) => s + (calculateDynamicProfit(x)), 0))}</p>
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2 uppercase tracking-tighter">All-time Profit</p>
           </div>
         </div>
@@ -233,7 +236,7 @@ export default function Shops() {
                            {r.quantity}
                          </button>
                        </td>
-                       <td className="px-6 py-4 text-right tabular-nums text-gray-500 font-bold">{formatCurrency(r.avg_cost_USD)}</td>
+                       <td className="px-6 py-4 text-right tabular-nums text-gray-500 font-bold">{formatUnitCost(r.item, activeBase)}</td>
                        <td className="px-6 py-4 text-center">
                          {r.isLow
                            ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-red-50 text-red-600 border border-red-100"><AlertTriangle className="w-3 h-3" /> Critical</span>
@@ -282,7 +285,7 @@ export default function Shops() {
                         </button>
                        <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100">
                          <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Cost</p>
-                         <p className="text-sm font-black text-emerald-900 mt-1">{formatCurrency(r.avg_cost_USD)}</p>
+                         <p className="text-sm font-black text-emerald-900 mt-1">{formatUnitCost(r.item, activeBase)}</p>
                        </div>
                      </div>
 
@@ -340,9 +343,9 @@ export default function Shops() {
                       <p className="text-sm font-black text-gray-900 tracking-tighter">{formatHistoricalDualCurrency(sale.selling_price * sale.quantity, sale.currency, sale.converted_price_USD)}</p>
                       <p className={clsx(
                         "text-[10px] font-black uppercase mt-1 tracking-tighter",
-                        sale.profit_USD >= 0 ? 'text-emerald-500' : 'text-red-500'
+                        calculateDynamicProfit(sale) >= 0 ? 'text-emerald-500' : 'text-red-500'
                       )}>
-                        {sale.profit_USD >= 0 ? '+' : ''}{formatCurrency(sale.profit_USD)}
+                        {calculateDynamicProfit(sale) >= 0 ? '+' : ''}{formatCurrency(calculateDynamicProfit(sale))}
                       </p>
                     </div>
                   </div>

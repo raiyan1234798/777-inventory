@@ -13,6 +13,7 @@ import ManageWarehouses from './pages/ManageWarehouses';
 import Reports from './pages/Reports';
 import StockReports from './pages/StockReports';
 import Insights from './pages/Insights';
+import AuditLogs from './pages/AuditLogs';
 import Login from './pages/Login';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useEffect } from 'react';
@@ -41,6 +42,7 @@ function App() {
             <Route path="stock-reports" element={<StockReports />} />
             <Route path="insights" element={<Insights />} />
             <Route path="users" element={<Users />} />
+            <Route path="audit-logs" element={<AuditLogs />} />
             <Route path="notifications" element={<Notifications />} />
             <Route path="manage-shops" element={<ManageShops />} />
             <Route path="manage-warehouses" element={<ManageWarehouses />} />

@@ -4,7 +4,7 @@ import {
   BarChart3, ShoppingCart, Globe2, Activity,
   ArrowUpRight, Target, Zap
 } from 'lucide-react';
-import { useStore, formatCurrency, EXCHANGE_RATES, CURRENCIES } from '../store';
+import { useStore, formatCurrency, EXCHANGE_RATES, CURRENCIES , calculateDynamicProfit } from "../store";
 import { format } from 'date-fns';
 import clsx from 'clsx';
 import { Sparkline, DonutChart, Gauge } from '../components/DashboardCharts';
@@ -13,23 +13,27 @@ export default function Finance() {
   const { sales, containers, locations, items, inventory } = useStore();
   const [displayCurrency, setDisplayCurrency] = useState('USD');
 
-  const convert = (amountINR: number) => {
+  const fmt = (amountUSD: number) => {
     const rate = EXCHANGE_RATES[displayCurrency] ?? 1;
-    return amountINR / rate;
+    const converted = amountUSD * rate;
+    return formatCurrency(converted, displayCurrency);
   };
-
-  const fmt = (amountINR: number) => formatCurrency(convert(amountINR), displayCurrency);
 
   const stats = useMemo(() => {
     const totalRevenue = sales.reduce((s, x) => s + (x.converted_price_USD || 0), 0);
     const totalCOGS = sales.reduce((s, x) => s + (x.avg_cost_USD || 0) * (x.quantity || 0), 0);
-    const totalProfit = sales.reduce((s, x) => s + (x.profit_USD || 0), 0);
+    const totalProfit = sales.reduce((s, x) => s + (calculateDynamicProfit(x)), 0);
     const totalContainerCost = containers.reduce((s, c) => s + (c.converted_cost_USD || 0), 0);
     const totalInventoryValue = inventory.reduce((s, e) => s + (e.quantity || 0) * (e.avg_cost_USD || 0), 0);
     const profitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
     
+    const itemMap = new Map();
+    for (const item of items) {
+      itemMap.set(item.id, item);
+    }
+    
     const totalPotentialRevenue = inventory.reduce((s, e) => {
-      const item = items.find(i => i.id === e.item_id);
+      const item = itemMap.get(e.item_id);
       return s + e.quantity * (item?.retail_price || 0);
     }, 0);
     const potentialProfit = totalPotentialRevenue - totalInventoryValue;
@@ -83,11 +87,16 @@ export default function Finance() {
     sales.forEach(s => {
       if (!map[s.item_id]) map[s.item_id] = { revenue: 0, profit: 0, qty: 0 };
       map[s.item_id].revenue += s.converted_price_USD;
-      map[s.item_id].profit += s.profit_USD;
+      map[s.item_id].profit += calculateDynamicProfit(s);
       map[s.item_id].qty += s.quantity;
     });
+    const itemMap = new Map();
+    for (const item of items) {
+      itemMap.set(item.id, item);
+    }
+    
     return Object.entries(map)
-      .map(([id, data]) => ({ ...data, item: items.find(i => i.id === id)?.name ?? id }))
+      .map(([id, data]) => ({ ...data, item: itemMap.get(id)?.name ?? id }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 5);
   }, [sales, items]);
@@ -105,7 +114,7 @@ export default function Finance() {
         return d.getFullYear() === m.year && d.getMonth() === m.month;
       });
       const revenue = mSales.reduce((s, x) => s + (x.converted_price_USD || 0), 0);
-      const profit = mSales.reduce((s, x) => s + (x.profit_USD || 0), 0);
+      const profit = mSales.reduce((s, x) => s + (calculateDynamicProfit(x)), 0);
       return { ...m, revenue, profit };
     });
   }, [sales]);
@@ -149,7 +158,7 @@ export default function Finance() {
           <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-6">Gross Inflow</p>
           <div className="flex items-end justify-between">
             <div>
-              <h2 className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{fmt(stats.totalRevenue)}</h2>
+              <h2 className="text-xl lg:text-2xl font-black text-gray-900 tracking-tighter tabular-nums overflow-hidden">{fmt(stats.totalRevenue)}</h2>
               <div className="flex items-center gap-1.5 mt-2">
                 <span className="px-1.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-600 font-black text-[9px] uppercase">Globalized</span>
                 <p className="text-xs text-gray-400 font-bold">{sales.length} Orders</p>
@@ -163,7 +172,7 @@ export default function Finance() {
           <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-6">Capital Flow (COGS)</p>
           <div className="flex items-end justify-between">
             <div>
-              <h2 className="text-3xl font-black text-gray-900 tracking-tighter tabular-nums">{fmt(stats.totalCOGS)}</h2>
+              <h2 className="text-xl lg:text-2xl font-black text-gray-900 tracking-tighter tabular-nums overflow-hidden">{fmt(stats.totalCOGS)}</h2>
               <div className="flex items-center gap-1.5 mt-2 text-gray-400">
                 <Package className="w-3.5 h-3.5" />
                 <p className="text-xs font-bold uppercase tracking-tight">Stock Reversal</p>
@@ -179,7 +188,7 @@ export default function Finance() {
           <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-6">Net Yield</p>
           <div className="flex items-end justify-between">
             <div>
-              <h2 className={clsx("text-3xl font-black tracking-tighter tabular-nums", stats.totalProfit >= 0 ? 'text-emerald-500' : 'text-red-500')}>
+              <h2 className={clsx("text-xl lg:text-2xl font-black tracking-tighter tabular-nums overflow-hidden", stats.totalProfit >= 0 ? 'text-emerald-500' : 'text-red-500')}>
                 {fmt(stats.totalProfit)}
               </h2>
               <div className="flex items-center gap-1.5 mt-2">

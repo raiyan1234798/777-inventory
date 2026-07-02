@@ -4,18 +4,26 @@ import {
   Truck, Tag, Globe2, Package, Store, Upload, FileText, X, AlertTriangle,
   Pencil, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight,
   Warehouse as WarehouseIcon, Filter, BarChart3, TrendingUp, ArrowUpDown, Settings, MapPin,
-  History, CheckCircle, Edit3, Minus, RefreshCw, Eye, EyeOff, Printer
+  History, CheckCircle, Edit3, Minus, RefreshCw, Eye, EyeOff, Printer, DollarSign, Eraser
 } from 'lucide-react';
 import clsx from 'clsx';
 import { db } from '../lib/firebase';
 import { collection, doc, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import Modal from '../components/Modal';
+import BulkBrandPriceModal from '../components/BulkBrandPriceModal';
 import {
-  useStore, COUNTRIES, CURRENCIES, toUSD, fromUSD, formatCurrency, formatInCurrency, formatDualCurrency, formatHistoricalDualCurrency,
+  useStore, logAction, COUNTRIES, CURRENCIES, toUSD, fromUSD, formatCurrency, formatInCurrency, formatUnitCost, formatRetailPrice, formatDualCurrency, formatHistoricalDualCurrency,
   type Location, type Brand, type Item, type InventoryEntry, type ImportSession
 } from '../store';
 import { useAuthStore } from '../store/authStore';
-import { exportInventorySystemData, exportInventoryToLedger, exportStockReport } from '../lib/bulkOperations';
+import { 
+  exportInventorySystemData, 
+  exportInventoryToLedger, 
+  exportStockReport,
+  exportGroupedStockReport,
+  exportSingleBrandToExcel,
+  exportSingleBrandToPDF
+} from '../lib/bulkOperations';
 import { generateBrandSKU, canonicalSKU } from '../lib/skuGenerator';
 import { sortStockDistribution, sortLocationBreakdown } from '../lib/stockDistribution';
 import { matchesItemSearch } from '../lib/searchUtils';
@@ -85,7 +93,8 @@ export default function Warehouse() {
     addContainer, batchStockEntry, deleteStockEntry, deleteStockEntries,
     deleteItems, deleteContainers, deleteLocations, deleteBrands,
     clearMasterData, clearHistory, clearLocationStock,
-    setImportModalOpen, importSessions, deleteImportSession, fixImportStock, createNotification
+    setImportModalOpen, importSessions, deleteImportSession, fixImportStock, createNotification,
+    deletedContainerSnapshots, undoDeleteContainer
   } = useStore();
 
   const warehouses = locations.filter(l => l.type === 'warehouse');
@@ -103,6 +112,12 @@ export default function Warehouse() {
   const [selectedLocationIds, setSelectedLocationIds] = useState<Set<string>>(new Set());
   const [selectedBrandIds, setSelectedBrandIds] = useState<Set<string>>(new Set());
   const [selectedPurgeLocation, setSelectedPurgeLocation] = useState('');
+
+  // Brand Stock Clear tool state
+  const [bscLocation, setBscLocation] = useState('');
+  const [bscBrand, setBscBrand] = useState('');
+  const [bscSelectedItems, setBscSelectedItems] = useState<Set<string>>(new Set());
+  const [bscSaving, setBscSaving] = useState(false);
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>('name');
@@ -126,9 +141,12 @@ export default function Warehouse() {
   const [transferModal, setTransferModal] = useState(false);
   const [onboardModal, setOnboardModal] = useState(false);
   const [addStockModal, setAddStockModal] = useState(false);
+  const [addStockMinimized, setAddStockMinimized] = useState(false);
   const [deleteConfirmModal, setDeleteConfirmModal] = useState<{ isOpen: boolean; id?: string; name?: string; isBulk: boolean; tab?: ActiveTab }>({
     isOpen: false, isBulk: false
   });
+  const [deleteContainerItems, setDeleteContainerItems] = useState(false);
+  const [undoToast, setUndoToast] = useState<{ visible: boolean; message: string; onUndo: (() => void) | null } | null>(null);
   const [adjustInvoiceContainer, setAdjustInvoiceContainer] = useState<string | null>(null);
   const [adjustInvoiceItems, setAdjustInvoiceItems] = useState<{ transaction_id: string; name: string; original_qty: number; new_quantity: number }[]>([]);
   const [activeStep, setActiveStep] = useState(1);
@@ -136,21 +154,28 @@ export default function Warehouse() {
   const [exportFilters, setExportFilters] = useState({ locationId: '', brandId: '', categoryId: '' });
   // Export All filter modal state
   const [exportAllModalOpen, setExportAllModalOpen] = useState(false);
-  const [exportAllFilters, setExportAllFilters] = useState({ brandId: '', locationType: '' as '' | 'warehouse' | 'shop', locationId: '' });
+  const [exportAllFilters, setExportAllFilters] = useState<{ brandId: string; locationId: string; locationType: string; unitCostCurrency: string; retailPriceCurrency: string; includeEmptyStocks: boolean }>({ brandId: '', locationId: '', locationType: '', unitCostCurrency: 'USD', retailPriceCurrency: 'ZMW', includeEmptyStocks: false });
+  const [isDataLedgerExporting, setIsDataLedgerExporting] = useState(false);
+  const [bulkPriceBrand, setBulkPriceBrand] = useState<{id: string, name: string} | null>(null);
   const [exportAllLoading, setExportAllLoading] = useState(false);
   const [addStockMode, setAddStockMode] = useState<'existing' | 'new'>('existing');
+  const [addStockDate, setAddStockDate] = useState(new Date().toISOString().split('T')[0]);
+  const [addStockContainerNo, setAddStockContainerNo] = useState('');
+  const [addStockBrandFilter, setAddStockBrandFilter] = useState('');
   const [addStockForm, setAddStockForm] = useState({
     // existing item mode
     item_id: '', location_id: '', quantity: 1, unit_cost: 0, currency: 'USD',
     // new item mode
     brand_id: '', brand_manual: '', item_name: '', category: '', sku: '', retail_price: 0, min_stock_limit: 0,
   });
+  const [stagedItems, setStagedItems] = useState<any[]>([]);
   const [addStockManualBrand, setAddStockManualBrand] = useState(false);
 
   const [locationForm, setLocationForm] = useState({ name: '', type: 'warehouse' as 'warehouse' | 'shop', country: 'Zambia', currency: 'USD' });
   const [brandForm, setBrandForm] = useState({ name: '', origin_country: 'Zambia' });
   const [itemForm, setItemForm] = useState({ id: '', brand_id: '', name: '', category: '', sku: '', min_stock_limit: 0, avg_cost_USD: 0, retail_price: 0, stock: 0, inventory_id: '', location_id: '', brand_manual: '' });
   const [avgCostCurrency, setAvgCostCurrency] = useState<'USD' | 'ZMW'>('USD');
+  const [retailCurrency, setRetailCurrency] = useState<'USD' | 'ZMW'>('ZMW');
   // Independent display-currency selectors for the inventory table columns.
   // Defaults: Unit Cost in USD ($), Retail in ZMW (Kwacha).
   const [costDisplayCurrency, setCostDisplayCurrency] = useState<string>('USD');
@@ -466,7 +491,7 @@ export default function Warehouse() {
         await deleteItems(Array.from(selectedItemIds));
         setSelectedItemIds(new Set());
       } else if (tab === 'containers') {
-        await deleteContainers(Array.from(selectedContainerIds));
+        await deleteContainers(Array.from(selectedContainerIds), deleteContainerItems);
         setSelectedContainerIds(new Set());
       } else if (tab === 'locations') {
         await deleteLocations(Array.from(selectedLocationIds));
@@ -480,11 +505,12 @@ export default function Warehouse() {
       alert("Bulk delete failed: " + err.message);
     } finally {
       setSaving(false);
+      setDeleteContainerItems(false);
     }
   };
 
   const handleDeleteStock = (id: string, name: string) => {
-    setDeleteConfirmModal({ isOpen: true, isBulk: false, id, name });
+    setDeleteConfirmModal({ isOpen: true, isBulk: false, id, name, tab: activeTab });
   };
 
   const executeSingleDelete = async () => {
@@ -492,13 +518,61 @@ export default function Warehouse() {
     if (!id) return;
     setSaving(true);
     setDeleteConfirmModal(f => ({ ...f, isOpen: false }));
+    const shouldRevertStock = tab === 'containers' && deleteContainerItems;
     try {
       if (tab === 'inventory') {
         await deleteStockEntry(id);
       } else if (tab === 'items') {
         await deleteItems([id]);
       } else if (tab === 'containers') {
-        await deleteContainers([id]);
+        // Snapshot the inventory state BEFORE deleting for undo
+        const session = importSessions.find(s => s.container_id === id);
+        const snapshotItems = session?.items ?? [];
+        const snapshotLocationId = session?.location_id ?? '';
+
+        await deleteContainers([id], shouldRevertStock);
+
+        if (shouldRevertStock && snapshotItems.length > 0) {
+          // Show undo toast
+          setUndoToast({
+            visible: true,
+            message: `Stock reverted for ${snapshotItems.length} items from container ${name}.`,
+            onUndo: async () => {
+              setUndoToast(null);
+              setSaving(true);
+              try {
+                // Re-add stock quantities that were subtracted
+                const entries = snapshotItems
+                  .filter(i => i.item_id && i.receivedQty)
+                  .map(i => ({
+                    location_id: snapshotLocationId,
+                    item_id: i.item_id,
+                    item_name: i.item_name || 'Unknown',
+                    quantity: i.receivedQty,
+                    unit_cost: i.unitCost || 0,
+                    currency: session?.currency || 'USD',
+                    container_id: null,
+                    is_absolute_override: false,
+                  }));
+                if (entries.length > 0) {
+                  await batchStockEntry(entries, 'Undo Container Deletion', { skipNotifications: true });
+                }
+                alert('Stock quantities restored successfully.');
+              } catch (err: any) {
+                alert('Undo failed: ' + err.message);
+              } finally {
+                setSaving(false);
+              }
+            }
+          });
+          // Auto-dismiss after 12 seconds
+          setTimeout(() => setUndoToast(t => t ? { ...t, visible: false } : null), 12000);
+        } else {
+          alert(`Deleted ${name || 'container'} successfully.`);
+        }
+        setSaving(false);
+        setDeleteContainerItems(false);
+        return;
       } else if (tab === 'locations') {
         await deleteLocation(id);
       } else if (tab === 'brands') {
@@ -511,6 +585,7 @@ export default function Warehouse() {
       alert("Deletion failed: " + err.message);
     } finally {
       setSaving(false);
+      setDeleteContainerItems(false);
     }
   };
 
@@ -550,7 +625,7 @@ export default function Warehouse() {
   const filteredBrands = useMemo(() => {
     if (!brandsSearch) return brands;
     const q = brandsSearch.toLowerCase();
-    return brands.filter(b => b.name.toLowerCase().includes(q) || b.origin_country.toLowerCase().includes(q));
+    return brands.filter(b => (b.name || '').toLowerCase().includes(q) || (b.origin_country || '').toLowerCase().includes(q));
   }, [brands, brandsSearch]);
 
   // Pagination helpers for other tabs
@@ -623,7 +698,7 @@ export default function Warehouse() {
       // Handle manual brand creation or resolution if requested
       if (isManualBrand && itemForm.brand_manual) {
         const manualName = itemForm.brand_manual.trim();
-        const existingBrand = brands.find(b => b.name.toLowerCase() === manualName.toLowerCase());
+        const existingBrand = brands.find(b => (b.name || '').toLowerCase() === manualName.toLowerCase());
         if (existingBrand) {
           finalBrandId = existingBrand.id;
         } else {
@@ -641,41 +716,79 @@ export default function Warehouse() {
       if (editingItemId) {
         // Prepare item data for master record (exclude inventory-specific fields)
         const { stock, inventory_id, id, location_id, brand_manual, retail_price, avg_cost_USD, ...itemData } = itemForm;
-        const processedRetailPrice = toUSD(retail_price, 'ZMW');
+        const processedRetailPrice = retailCurrency === 'ZMW' ? toUSD(retail_price, 'ZMW') : retail_price;
         const processedAvgCost = avgCostCurrency === 'ZMW' ? toUSD(avg_cost_USD, 'ZMW') : avg_cost_USD;
         
         // Update item master data
-        await updateItem(editingItemId, { ...itemData, retail_price: processedRetailPrice, avg_cost_USD: processedAvgCost, brand_id: finalBrandId });
+        const masterUpdatePromise = updateItem(editingItemId, { 
+          ...itemData, 
+          retail_price: processedRetailPrice, 
+          avg_cost_USD: processedAvgCost, 
+          brand_id: finalBrandId,
+          retail_price_local: retailCurrency === 'ZMW' ? retail_price : null,
+          avg_cost_local: avgCostCurrency === 'ZMW' ? avg_cost_USD : null,
+          local_currency: retailCurrency === 'ZMW' || avgCostCurrency === 'ZMW' ? 'ZMW' : 'USD'
+        });
         
-        // Update inventory quantity and cost if this edit was triggered from an inventory row
-        if (itemForm.inventory_id) {
-          await updateDoc(doc(db, 'inventory', itemForm.inventory_id), { 
+        const promises = [masterUpdatePromise];
+
+        // Update inventory quantity and cost if a location is selected
+        if (itemForm.location_id) {
+          const invId = itemForm.inventory_id || `${itemForm.location_id.replace(/\//g, '-')}_${editingItemId.replace(/\//g, '-')}`;
+          promises.push(setDoc(doc(db, 'inventory', invId), { 
+            id: invId,
+            item_id: editingItemId,
+            location_id: itemForm.location_id,
             quantity: itemForm.stock,
             avg_cost_USD: processedAvgCost
-          });
+          }, { merge: true }));
+          
+          promises.push(logAction('update', 'item', editingItemId, itemData.name, `Updated stock to ${itemForm.stock} for location ID: ${itemForm.location_id}`));
         }
+        
+        await Promise.all(promises);
       } else {
         // Add new item
         const { id: _, stock, inventory_id, location_id, brand_manual, retail_price, avg_cost_USD, ...itemData } = itemForm;
         const processedRetailPrice = toUSD(retail_price, 'ZMW');
         const processedAvgCost = avgCostCurrency === 'ZMW' ? toUSD(avg_cost_USD, 'ZMW') : avg_cost_USD;
 
-        const itemRef = doc(collection(db, 'items'));
-        const newItemId = itemRef.id;
-        
-        // 1. Save Master Item Record
-        await setDoc(itemRef, { 
-          id: newItemId, 
-          ...itemData, 
-          retail_price: processedRetailPrice,
-          avg_cost_USD: processedAvgCost,
-          brand_id: finalBrandId 
-        });
+        const existingItem = items.find(i => 
+          i.brand_id === finalBrandId && 
+          (i.name || '').toLowerCase().trim() === (itemForm.name || '').toLowerCase().trim()
+        );
+        let newItemId;
+
+        if (existingItem) {
+          newItemId = existingItem.id;
+          await updateItem(newItemId, { 
+            retail_price: processedRetailPrice, 
+            avg_cost_USD: processedAvgCost,
+            retail_price_local: retailCurrency === 'ZMW' ? retail_price : null,
+            avg_cost_local: avgCostCurrency === 'ZMW' ? avg_cost_USD : null,
+            local_currency: retailCurrency === 'ZMW' || avgCostCurrency === 'ZMW' ? 'ZMW' : 'USD'
+          });
+        } else {
+          const itemRef = doc(collection(db, 'items'));
+          newItemId = itemRef.id;
+          
+          // 1. Save Master Item Record
+          await setDoc(itemRef, { 
+            id: newItemId, 
+            ...itemData, 
+            retail_price: processedRetailPrice,
+            avg_cost_USD: processedAvgCost,
+            brand_id: finalBrandId,
+            retail_price_local: retailCurrency === 'ZMW' ? retail_price : null,
+            avg_cost_local: avgCostCurrency === 'ZMW' ? avg_cost_USD : null,
+            local_currency: retailCurrency === 'ZMW' || avgCostCurrency === 'ZMW' ? 'ZMW' : 'USD'
+          });
+        }
 
         // 2. If initial stock and location provided, seed the inventory
         if (itemForm.location_id && itemForm.stock > 0) {
           const invId = `${itemForm.location_id}_${newItemId}`;
-          await setDoc(doc(db, 'inventory', invId), {
+          const p1 = setDoc(doc(db, 'inventory', invId), {
             id: invId,
             location_id: itemForm.location_id,
             item_id: newItemId,
@@ -685,7 +798,7 @@ export default function Warehouse() {
 
           // 3. Log initial transaction
           const txRef = doc(collection(db, 'transactions'));
-          await setDoc(txRef, {
+          const p2 = setDoc(txRef, {
             id: txRef.id,
             type: 'stock_entry',
             from_location: 'direct_entry',
@@ -699,6 +812,8 @@ export default function Warehouse() {
             performed_by: appUser?.name || 'Admin',
             timestamp: new Date().toISOString()
           });
+          
+          await Promise.all([p1, p2]);
         }
       }
       
@@ -734,34 +849,79 @@ export default function Warehouse() {
 
       // 2. Process Items in Batches
       // Identify and create missing items first
+      let currentBatch = writeBatch(db);
+      let opCount = 0;
+      const batches = [currentBatch];
+
+      const commitOp = () => {
+        opCount++;
+        if (opCount >= 400) {
+          currentBatch = writeBatch(db);
+          batches.push(currentBatch);
+          opCount = 0;
+        }
+      };
+
+      const newBrands = new Map<string, string>(); // name -> id
+      const usedSkusSet = new Set(items.map(i => i.sku).filter(Boolean));
+
       for (const row of onboardForm.rows) {
         if (!row.matched_item_id) {
-           let brand = brands.find(b => b.name.toLowerCase() === row.brand_name.toLowerCase());
-           let brandId = brand?.id;
+           let brand = brands.find(b => (b.name || '').toLowerCase() === (row.brand_name || '').toLowerCase());
+           let brandId = brand?.id || newBrands.get((row.brand_name || '').toLowerCase());
+           
            if (!brandId) {
-             brandId = await addBrand({ name: row.brand_name, origin_country: onboardForm.source_country });
+             const bRef = doc(collection(db, 'brands'));
+             brandId = bRef.id;
+             newBrands.set((row.brand_name || '').toLowerCase(), brandId);
+             currentBatch.set(bRef, { id: brandId, name: row.brand_name, origin_country: onboardForm.source_country });
+             commitOp();
            }
-           const iRef = doc(collection(db, 'items'));
-           const itemId = iRef.id;
-           const usedSkusSet = new Set(items.map(i => i.sku).filter(Boolean));
-           const autoSku = row.sku || generateBrandSKU(row.brand_name || 'Imported', row.item_name, usedSkusSet);
-           await setDoc(iRef, {
-             id: itemId, brand_id: brandId, name: row.item_name,
-             sku: autoSku,
-             category: row.category || 'General',
-             retail_price: row.retail_price,
-             min_stock_limit: row.min_stock_limit || 0
-           });
-           row.matched_item_id = itemId;
+
+           const existingItem = items.find(i => 
+              i.brand_id === brandId && 
+              (i.name || '').toLowerCase().trim() === (row.item_name || '').toLowerCase().trim()
+           );
+
+           if (existingItem) {
+              row.matched_item_id = existingItem.id;
+              const updates: Partial<any> = {};
+              if (row.retail_price) updates.retail_price = row.retail_price;
+              if (row.min_stock_limit && row.min_stock_limit !== 0) updates.min_stock_limit = row.min_stock_limit;
+              if (Object.keys(updates).length > 0) {
+                 currentBatch.update(doc(db, 'items', existingItem.id), updates);
+                 commitOp();
+              }
+           } else {
+             const iRef = doc(collection(db, 'items'));
+             const itemId = iRef.id;
+             const autoSku = row.sku || generateBrandSKU(row.brand_name || 'Imported', row.item_name, usedSkusSet);
+             usedSkusSet.add(autoSku);
+             
+             currentBatch.set(iRef, {
+               id: itemId, brand_id: brandId, name: row.item_name,
+               sku: autoSku,
+               category: row.category || 'General',
+               retail_price: row.retail_price,
+               min_stock_limit: row.min_stock_limit || 0
+             });
+             commitOp();
+             row.matched_item_id = itemId;
+           }
         } else {
            // Update existing item's retail_price and min_stock_limit if provided
            const updates: Partial<any> = {};
            if (row.retail_price) updates.retail_price = row.retail_price;
            if (row.min_stock_limit && row.min_stock_limit !== 0) updates.min_stock_limit = row.min_stock_limit;
            if (Object.keys(updates).length > 0) {
-              await updateItem(row.matched_item_id, updates);
+              currentBatch.update(doc(db, 'items', row.matched_item_id), updates);
+              commitOp();
            }
         }
+      }
+
+      for (const b of batches) {
+        await b.commit();
       }
 
       // Now batch all stock entries
@@ -868,88 +1028,139 @@ export default function Warehouse() {
     setAddStockForm({ item_id: '', location_id: '', quantity: 1, unit_cost: 0, currency: 'USD', brand_id: '', brand_manual: '', item_name: '', category: '', sku: '', retail_price: 0, min_stock_limit: 0 });
     setAddStockManualBrand(false);
     setAddStockMode('existing');
+    setAddStockDate(new Date().toISOString().split('T')[0]);
+    setAddStockBrandFilter('');
+    setStagedItems([]);
+    setAddStockMinimized(false);
   };
 
-  const handleAddStock = async (e: React.FormEvent) => {
+  const handleStageItem = (e: React.FormEvent) => {
     e.preventDefault();
     if (!addStockForm.location_id || addStockForm.quantity <= 0) return;
+    
+    if (addStockMode === 'existing' && !addStockForm.item_id) {
+      alert('Please select an item.');
+      return;
+    }
+    if (addStockMode === 'new' && !addStockManualBrand && !addStockForm.brand_id) {
+      alert('Please select or enter a brand.');
+      return;
+    }
+
+    setStagedItems(prev => [...prev, { ...addStockForm, mode: addStockMode, isManualBrand: addStockManualBrand }]);
+    
+    // Clear only item-specific fields to allow quick subsequent additions
+    setAddStockForm(f => ({ ...f, item_id: '', quantity: 1, unit_cost: 0, item_name: '', category: '', sku: '', retail_price: 0, min_stock_limit: 0, brand_manual: '' }));
+  };
+
+  const handleAddStock = async () => {
+    if (stagedItems.length === 0) return;
     setSaving(true);
     try {
-      let itemId = addStockForm.item_id;
-      let itemName = '';
-
-      if (addStockMode === 'new') {
-        // Create brand if manual
-        let finalBrandId = addStockForm.brand_id;
-        if (addStockManualBrand && addStockForm.brand_manual.trim()) {
-          finalBrandId = await addBrand({ name: addStockForm.brand_manual.trim(), origin_country: 'Zambia' });
-        }
-        if (!finalBrandId) { alert('Please select or enter a brand.'); setSaving(false); return; }
-
-        // Create new item
-        const itemRef = doc(collection(db, 'items'));
-        itemId = itemRef.id;
-        itemName = addStockForm.item_name;
-        const usedSkusForNewItem = new Set(items.map(i => i.sku).filter(Boolean));
-        const brandNameForSku = isManualBrand ? addStockForm.brand_manual : (brands.find(b => b.id === addStockForm.brand_id)?.name ?? 'XX');
-        const autoSku = addStockForm.sku || generateBrandSKU(brandNameForSku, addStockForm.item_name, usedSkusForNewItem);
-        await setDoc(itemRef, {
-          id: itemId,
-          brand_id: finalBrandId,
-          name: addStockForm.item_name,
-          sku: autoSku,
-          category: addStockForm.category || 'General',
-          retail_price: addStockForm.retail_price || 0,
-          min_stock_limit: addStockForm.min_stock_limit || 0,
-        });
-      } else {
-        const item = items.find(i => i.id === itemId);
-        if (!item) { alert('Please select an item.'); setSaving(false); return; }
-        itemName = item.name;
+      let firstLocationId = '';
+      let firstCurrency = 'USD';
+      if (stagedItems.length > 0) {
+        firstLocationId = stagedItems[0].location_id;
+        firstCurrency = stagedItems[0].currency || 'USD';
       }
 
-      // Add stock entry
-      await batchStockEntry([{
-        container_id: 'manual_entry',
-        location_id: addStockForm.location_id,
-        item_id: itemId,
-        item_name: itemName,
-        quantity: addStockForm.quantity,
-        unit_cost: addStockForm.unit_cost,
-        currency: addStockForm.currency,
-      }], appUser?.name ?? 'Admin');
+      const containerNo = addStockContainerNo.trim() || `MANUAL-${Date.now().toString().slice(-6)}`;
+      const activeContainerId = await useStore.getState().addContainer({
+        container_no: containerNo,
+        source_country: 'Manual Import',
+        total_cost: 0,
+        currency: firstCurrency,
+        converted_cost_USD: 0,
+        date: addStockDate.length === 10 ? addStockDate + 'T00:00:00.000Z' : addStockDate,
+        notes: `Manual stock add of ${stagedItems.length} items`,
+        status: 'Received'
+      });
 
-      // Save Import Session for manual add stock so it shows up in Import History
-      const itemObj = items.find(i => i.id === itemId);
-      const brandObj = brands.find(b => b.id === (itemObj?.brand_id || addStockForm.brand_id));
-      const sessionItems = [{
-        item_id: itemId,
-        item_name: itemName,
-        sku: addStockForm.sku || itemObj?.sku || '',
-        brand: brandObj?.name || addStockForm.brand_manual || 'Manual',
-        invoiceQty: addStockForm.quantity,
-        receivedQty: addStockForm.quantity,
-        unitCost: addStockForm.unit_cost,
-        retailPrice: addStockForm.retail_price || itemObj?.retail_price || 0,
-      }];
+      const stockEntries = [];
+      const sessionItems = [];
+      const usedSkusForNewItem = new Set(items.map(i => i.sku).filter(Boolean));
+      
+      let totalItems = 0;
+
+      for (const staged of stagedItems) {
+        let itemId = staged.item_id;
+        let itemName = '';
+        let finalBrandId = staged.brand_id;
+        let brandName = '';
+
+        if (staged.mode === 'new') {
+          if (staged.isManualBrand && staged.brand_manual.trim()) {
+            finalBrandId = await addBrand({ name: staged.brand_manual.trim(), origin_country: 'Zambia' }) || '';
+          }
+          const itemRef = doc(collection(db, 'items'));
+          itemId = itemRef.id;
+          itemName = staged.item_name;
+          
+          brandName = staged.isManualBrand ? staged.brand_manual : (brands.find(b => b.id === staged.brand_id)?.name ?? 'XX');
+          const autoSku = staged.sku || generateBrandSKU(brandName, staged.item_name, usedSkusForNewItem);
+          
+          await setDoc(itemRef, {
+            id: itemId,
+            brand_id: finalBrandId,
+            name: staged.item_name,
+            sku: autoSku,
+            category: staged.category || 'General',
+            retail_price: staged.retail_price || 0,
+            min_stock_limit: staged.min_stock_limit || 0,
+          });
+          usedSkusForNewItem.add(autoSku);
+        } else {
+          const item = items.find(i => i.id === itemId);
+          if (!item) continue;
+          itemName = item.name;
+          brandName = brands.find(b => b.id === item.brand_id)?.name || 'Unknown';
+        }
+
+        stockEntries.push({
+          container_id: activeContainerId,
+          location_id: staged.location_id,
+          item_id: itemId,
+          item_name: itemName,
+          quantity: staged.quantity,
+          unit_cost: staged.unit_cost,
+          currency: staged.currency,
+          timestamp: addStockDate,
+        });
+
+        sessionItems.push({
+          item_id: itemId,
+          item_name: itemName,
+          sku: staged.sku || items.find(i => i.id === itemId)?.sku || '',
+          brand: brandName,
+          invoiceQty: staged.quantity,
+          receivedQty: staged.quantity,
+          unitCost: staged.unit_cost,
+          retailPrice: staged.retail_price || items.find(i => i.id === itemId)?.retail_price || 0,
+        });
+
+        totalItems += staged.quantity;
+      }
+
+      await batchStockEntry(stockEntries, appUser?.name ?? 'Admin');
 
       await useStore.getState().saveImportSession({
-        date: new Date().toISOString(),
-        fileName: `Manual Add Stock: ${itemName}`,
-        location_id: addStockForm.location_id,
-        currency: addStockForm.currency,
-        itemCount: 1,
-        totalItems: addStockForm.quantity,
+        date: addStockDate.length === 10 ? addStockDate + 'T00:00:00.000Z' : addStockDate,
+        fileName: `Manual Add Stock: ${stagedItems.length} items`,
+        location_id: firstLocationId,
+        currency: firstCurrency,
+        itemCount: stagedItems.length,
+        totalItems: totalItems,
         items: sessionItems,
         status: 'confirmed',
-        container_id: 'manual_entry',
+        container_id: activeContainerId,
         performed_by: appUser?.name || 'Unknown',
       });
 
       setAddStockModal(false);
       resetAddStockForm();
+      setAddStockContainerNo('');
     } catch (err: any) {
-      alert('Failed to add stock: ' + err.message);
+      alert('Failed to add stock batch: ' + err.message);
     } finally {
       setSaving(false);
     }
@@ -1067,8 +1278,8 @@ export default function Warehouse() {
     const q = fixModalSearch.trim().toLowerCase();
     if (!q) return fixItems;
     return fixItems.filter(item => 
-      item.item_name.toLowerCase().includes(q) ||
-      item.brand.toLowerCase().includes(q) ||
+      (item.item_name || '').toLowerCase().includes(q) ||
+      (item.brand || '').toLowerCase().includes(q) ||
       (item.sku && item.sku.toLowerCase().includes(q))
     );
   }, [fixItems, fixModalSearch]);
@@ -1122,6 +1333,27 @@ export default function Warehouse() {
 
   return (
     <div className="space-y-6">
+      {/* Undo Toast */}
+      {undoToast?.visible && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-4 bg-gray-900 text-white text-sm font-medium px-5 py-3.5 rounded-2xl shadow-2xl border border-white/10 animate-in slide-in-from-bottom-4">
+          <span className="text-green-400 text-lg">✓</span>
+          <span>{undoToast.message}</span>
+          {undoToast.onUndo && (
+            <button
+              onClick={undoToast.onUndo}
+              className="ml-2 px-3 py-1 bg-white/15 hover:bg-white/25 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
+            >
+              Undo
+            </button>
+          )}
+          <button
+            onClick={() => setUndoToast(null)}
+            className="ml-1 text-white/40 hover:text-white/80 transition-colors text-base leading-none"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div>
@@ -1133,7 +1365,7 @@ export default function Warehouse() {
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
           <button 
             disabled={exporting || exportAllLoading}
-            onClick={() => { setExportAllFilters({ brandId: '', locationType: '', locationId: '' }); setExportAllModalOpen(true); }}
+            onClick={() => { setExportAllFilters({ brandId: '', locationType: '', locationId: '', unitCostCurrency: 'USD', retailPriceCurrency: 'ZMW', includeEmptyStocks: false }); setExportAllModalOpen(true); }}
             className="btn-secondary flex items-center gap-2 text-sm justify-center border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 transition-all font-bold disabled:opacity-50"
           >
             <FileText className="w-4 h-4" />
@@ -1153,7 +1385,8 @@ export default function Warehouse() {
                       inventory,
                       transactions: useStore.getState().transactions,
                       sales: useStore.getState().sales,
-                      returns: useStore.getState().returns
+                      returns: useStore.getState().returns,
+                      containers: useStore.getState().containers
                     });
                   } catch (err: any) {
                     alert('Ledger export failed: ' + err.message);
@@ -1178,6 +1411,7 @@ export default function Warehouse() {
                         transactions: useStore.getState().transactions,
                         sales: useStore.getState().sales,
                         returns: useStore.getState().returns,
+                        containers: useStore.getState().containers,
                         format: 'excel'
                       });
                     } catch (err: any) {
@@ -1204,6 +1438,7 @@ export default function Warehouse() {
                         transactions: useStore.getState().transactions,
                         sales: useStore.getState().sales,
                         returns: useStore.getState().returns,
+                        containers: useStore.getState().containers,
                         format: 'pdf'
                       });
                     } catch (err: any) {
@@ -1246,7 +1481,7 @@ export default function Warehouse() {
               <Boxes className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl font-extrabold text-gray-900 mt-2">{totalItems.toLocaleString()}</p>
+          <p className="text-xl lg:text-2xl font-extrabold text-gray-900 mt-2 tracking-tighter tabular-nums overflow-hidden">{totalItems.toLocaleString()}</p>
           <div className="h-1.5 w-full bg-gray-50 rounded-full mt-3 overflow-hidden">
             <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${healthyCount > 0 ? Math.round((healthyCount / Math.max(inventoryRows.length, 1)) * 100) : 0}%` }} />
           </div>
@@ -1259,7 +1494,7 @@ export default function Warehouse() {
               <Tag className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl font-extrabold text-gray-900 mt-2">{formatCurrency(totalValue)}</p>
+          <p className="text-xl lg:text-2xl font-extrabold text-gray-900 mt-2 tracking-tighter tabular-nums overflow-hidden">{formatCurrency(totalValue)}</p>
           <p className="text-[10px] text-gray-400 mt-5 font-medium flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> At average cost
           </p>
@@ -1271,7 +1506,7 @@ export default function Warehouse() {
               <TrendingUp className="w-4 h-4" />
             </div>
           </div>
-          <p className={clsx("text-2xl sm:text-3xl font-extrabold mt-2", potentialProfit > 0 ? 'text-violet-600' : 'text-gray-900')}>{formatCurrency(potentialProfit)}</p>
+          <p className={clsx("text-xl lg:text-2xl font-extrabold mt-2 tracking-tighter tabular-nums overflow-hidden", potentialProfit > 0 ? 'text-violet-600' : 'text-gray-900')}>{formatCurrency(potentialProfit)}</p>
           <p className="text-[10px] text-gray-400 mt-5 font-medium">Retail − Cost on current stock</p>
         </div>
         <div 
@@ -1290,7 +1525,7 @@ export default function Warehouse() {
               <AlertTriangle className="w-4 h-4" />
             </div>
           </div>
-          <p className={clsx("text-2xl sm:text-3xl font-extrabold mt-2", (lowCount + outCount) > 0 ? 'text-red-500' : 'text-gray-900')}>{lowCount + outCount}</p>
+          <p className={clsx("text-xl lg:text-2xl font-extrabold mt-2 tracking-tighter tabular-nums overflow-hidden", (lowCount + outCount) > 0 ? 'text-red-500' : 'text-gray-900')}>{lowCount + outCount}</p>
           <div className="flex items-center gap-2 mt-3">
             {lowCount > 0 && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">{lowCount} Low</span>}
             {outCount > 0 && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">{outCount} Out</span>}
@@ -1499,7 +1734,7 @@ export default function Warehouse() {
                         <select
                           title="Retail display currency"
                           value={retailDisplayCurrency}
-                          onChange={e => setRetailDisplayCurrency(e.target.value)}
+                          onChange={e => setRetailCurrency(e.target.value)}
                           onClick={e => e.stopPropagation()}
                           className="text-[10px] font-bold uppercase bg-emerald-50 border border-emerald-200 rounded px-1 py-0.5 text-emerald-700 focus:ring-1 focus:ring-emerald-400 cursor-pointer"
                         >
@@ -1613,9 +1848,9 @@ export default function Warehouse() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-semibold text-gray-900 tabular-nums">{r.quantity.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right text-gray-700 tabular-nums">{formatInCurrency(r.item.avg_cost_USD, costDisplayCurrency)}</td>
+                      <td className="px-4 py-3 text-right text-gray-700 tabular-nums">{formatUnitCost(r.item, costDisplayCurrency)}</td>
                       <td className="px-4 py-3 text-right">
-                        <p className="font-bold text-gray-900 tabular-nums">{formatInCurrency(r.item.retail_price || 0, retailDisplayCurrency)}</p>
+                        <p className="font-bold text-gray-900 tabular-nums">{formatRetailPrice(r.item, retailDisplayCurrency)}</p>
                         {r.profitMargin > 0 && (
                           <p className={clsx("text-[10px] font-bold mt-0.5", r.profitMargin >= 30 ? 'text-emerald-600' : r.profitMargin >= 15 ? 'text-blue-600' : 'text-gray-400')}>
                             {r.profitMargin.toFixed(0)}% margin
@@ -1624,7 +1859,7 @@ export default function Warehouse() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1.5">
-                          <button title="Edit Item & Costs" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: Number(fromUSD(r.item.retail_price || 0, 'ZMW').toFixed(2)), stock: r.quantity, inventory_id: r.id, location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
+                          <button title="Edit Item & Costs" onClick={() => { const locCur = (r.item as any).local_currency || 'ZMW'; setAvgCostCurrency('USD'); setRetailCurrency(locCur as any); setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: locCur === 'ZMW' && (r.item as any).retail_price_local ? (r.item as any).retail_price_local : Number(fromUSD(r.item.retail_price || 0, 'ZMW').toFixed(2)), stock: r.quantity, inventory_id: r.id, location_id: r.location_id, brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
                           <button title="Transfer Stock" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1, notes: '' }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-3.5 h-3.5" /></button>
                           <button
                             disabled={saving}
@@ -1682,7 +1917,7 @@ export default function Warehouse() {
                             onChange={() => toggleSelect(selectedInventoryIds, setSelectedInventoryIds, r.id)}
                           />
                           <div className="min-w-0">
-                            <h3 className="font-bold text-gray-900 text-sm truncate">{r.item.name}</h3>
+                            <h3 className="font-bold text-gray-900 text-sm">{r.item.name}</h3>
                             <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
                               SKU: {r.item.sku} <span className="opacity-50">·</span>
                               {r.brand && (
@@ -1700,7 +1935,7 @@ export default function Warehouse() {
                           </div>
                         </div>
                         <div className="flex gap-1.5 flex-shrink-0">
-                          <button title="Edit" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: Number(fromUSD(r.item.retail_price || 0, 'ZMW').toFixed(2)), stock: r.quantity, inventory_id: r.id, location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
+                          <button title="Edit" onClick={() => { const locCur = (r.item as any).local_currency || 'ZMW'; setAvgCostCurrency('USD'); setRetailCurrency(locCur as any); setEditingItemId(r.item_id); setItemForm({ id: r.item_id, brand_id: r.item.brand_id, name: r.item.name, category: r.item.category, sku: r.item.sku, min_stock_limit: r.item.min_stock_limit, avg_cost_USD: r.avg_cost_USD, retail_price: locCur === 'ZMW' && (r.item as any).retail_price_local ? (r.item as any).retail_price_local : Number(fromUSD(r.item.retail_price || 0, 'ZMW').toFixed(2)), stock: r.quantity, inventory_id: r.id, location_id: r.location_id, brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
                           <button title="Transfer" onClick={() => { setTransferForm({ from_location: r.location_id, to_location: '', item_id: r.item_id, quantity: 1, notes: '' }); setTransferModal(true); }} className="text-gray-400 hover:text-orange-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-orange-50"><Truck className="w-4 h-4" /></button>
                           <button
                              disabled={saving}
@@ -1756,11 +1991,11 @@ export default function Warehouse() {
                         </div>
                         <div className="bg-emerald-50 rounded-lg p-2.5 border border-emerald-100">
                           <p className="text-[9px] uppercase font-bold text-emerald-600 tracking-wider">Unit Cost ({costDisplayCurrency})</p>
-                          <p className="text-[11px] font-bold text-emerald-900 mt-0.5">{formatInCurrency(r.item.avg_cost_USD, costDisplayCurrency)}</p>
+                          <p className="text-[11px] font-bold text-emerald-900 mt-0.5">{formatUnitCost(r.item, costDisplayCurrency)}</p>
                         </div>
                         <div className="bg-purple-50 rounded-lg p-2.5 border border-purple-100">
                           <p className="text-[9px] uppercase font-bold text-purple-600 tracking-wider">Retail ({retailDisplayCurrency})</p>
-                          <p className="text-[11px] font-bold text-purple-900 mt-0.5">{formatInCurrency(r.item.retail_price || 0, retailDisplayCurrency)}</p>
+                          <p className="text-[11px] font-bold text-purple-900 mt-0.5">{formatRetailPrice(r.item, retailDisplayCurrency)}</p>
                           {r.profitMargin > 0 && <p className="text-[9px] font-bold text-purple-500 mt-0.5">{r.profitMargin.toFixed(0)}% margin</p>}
                         </div>
                       </div>
@@ -1887,7 +2122,7 @@ export default function Warehouse() {
                         onChange={toggleContainerAll}
                       />
                     </th>
-                    <th className="px-5 py-3 font-medium">Source Country</th>
+                    <th className="px-5 py-3 font-medium">Container Details</th>
                     <th className="px-5 py-3 font-medium">Date</th>
                     <th className="px-5 py-3 font-medium text-right">Total Cost</th>
                     <th className="px-5 py-3 font-medium">Packing List (Logged)</th>
@@ -1908,8 +2143,8 @@ export default function Warehouse() {
                         />
                       </td>
                       <td className="px-5 py-3.5 align-top">
-                        <div className="font-medium text-gray-900">{c.source_country}</div>
-                        <div className="text-[10px] text-primary mt-1 uppercase font-extrabold tracking-wider">#{c.container_no || c.id.slice(-6)}</div>
+                        <div className="font-bold text-gray-900 text-sm">{c.container_no ? c.container_no : (c.source_country === 'Smart Import' || c.source_country === 'Manual Import' ? `Import ${c.id.slice(-6)}` : c.source_country)}</div>
+                        <div className="text-[10px] text-gray-500 mt-1 uppercase font-semibold tracking-wider">{c.source_country}</div>
                         <div className="mt-1.5">
                           {c.status === 'Pending' ? (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-600 border border-amber-200">Pending Receipt</span>
@@ -1924,17 +2159,22 @@ export default function Warehouse() {
                         <div className="text-gray-400 text-[11px] mb-2 italic line-clamp-1" title={c.notes}>{c.notes || 'No container notes'}</div>
                         <div className="flex flex-wrap gap-1.5 min-h-[20px]">
                           {transactions.filter(t => t.container_id === c.id).length > 0 ? (
-                            expandedContainers.has(c.id) ? (
-                              transactions.filter(t => t.container_id === c.id).map((t: any) => (
-                                <span key={t.id} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 whitespace-nowrap">
-                                  {t.item_name} × {t.quantity}
+                            <>
+                              {expandedContainers.has(c.id) ? (
+                                transactions.filter(t => t.container_id === c.id).map((t: any) => (
+                                  <span key={t.id} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 whitespace-nowrap">
+                                    {t.item_name} × {t.quantity}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-[10px] text-gray-500 font-bold bg-gray-50 border border-gray-200 px-2.5 py-1 rounded-md">
+                                  {transactions.filter(t => t.container_id === c.id).length} items hidden
                                 </span>
-                              ))
-                            ) : (
-                              <span className="text-[10px] text-gray-500 font-bold bg-gray-50 border border-gray-200 px-2.5 py-1 rounded-md">
-                                {transactions.filter(t => t.container_id === c.id).length} items hidden
+                              )}
+                              <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-md">
+                                Total Qty: {transactions.filter(t => t.container_id === c.id).reduce((sum: number, t: any) => sum + (t.quantity || 0), 0).toLocaleString()}
                               </span>
-                            )
+                            </>
                           ) : (
                             <span className="text-[10px] text-gray-300">No stock entry linked yet</span>
                           )}
@@ -2043,8 +2283,66 @@ export default function Warehouse() {
             )}
           </div>
         )}
+        {/* ── Deleted Containers Archive (24h Undo) ── */}
+        {activeTab === 'containers' && deletedContainerSnapshots.filter(s => new Date(s.expires_at) > new Date()).length > 0 && (
+          <div className="mt-6 mx-4 sm:mx-5 mb-5">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></div>
+              <h3 className="text-xs font-black uppercase tracking-widest text-amber-600">Deleted Containers — Undo Available</h3>
+              <span className="ml-auto text-[10px] text-gray-400 font-medium">Available for 24 hours</span>
+            </div>
+            <div className="space-y-3">
+              {deletedContainerSnapshots
+                .filter(s => new Date(s.expires_at) > new Date())
+                .sort((a, b) => new Date(b.deleted_at).getTime() - new Date(a.deleted_at).getTime())
+                .map(snap => {
+                  const timeLeft = Math.max(0, Math.round((new Date(snap.expires_at).getTime() - Date.now()) / 360000) / 10);
+                  return (
+                    <div key={snap.id} className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-black text-gray-900">#{snap.container_no}</span>
+                          <span className="text-[10px] bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-full">DELETED</span>
+                          <span className="text-[10px] text-gray-400">Expires in {timeLeft}h</span>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          <span className="font-semibold">{snap.location_name ?? snap.location_id}</span>
+                          {' · '}{snap.total_items_count} item types
+                          {' · '}Deleted {new Date(snap.deleted_at).toLocaleString()}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {snap.items.slice(0, 6).map((i: any) => (
+                            <span key={i.item_id} className="text-[10px] bg-white border border-amber-200 rounded-full px-2 py-0.5 text-gray-700 font-medium">
+                              {i.item_name} × {i.receivedQty}
+                            </span>
+                          ))}
+                          {snap.items.length > 6 && (
+                            <span className="text-[10px] bg-gray-100 rounded-full px-2 py-0.5 text-gray-500">+{snap.items.length - 6} more</span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        className="flex-shrink-0 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black rounded-lg shadow transition-colors"
+                        onClick={async () => {
+                          if (!window.confirm(`Restore stock quantities for ${snap.items.length} items from container #${snap.container_no}? This will add back the quantities to ${snap.location_name ?? snap.location_id}.`)) return;
+                          try {
+                            await undoDeleteContainer(snap.id);
+                            alert('Stock quantities restored successfully!');
+                          } catch (err: any) {
+                            alert('Undo failed: ' + err.message);
+                          }
+                        }}
+                      >
+                        ↩ Undo
+                      </button>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
 
-        {/* ── Items Tab ── */}
+
         {activeTab === 'items' && (
           <div>
             <div className="p-4 flex flex-col sm:flex-row gap-3 justify-between border-b border-gray-50">
@@ -2122,7 +2420,7 @@ export default function Warehouse() {
                         <td className="px-5 py-3.5 text-right">
                           <div className="flex justify-end gap-1.5">
                             <button title="Regenerate SKU" onClick={() => handleRegenSingleSKU(item)} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><RefreshCw className="w-3.5 h-3.5" /></button>
-                            <button title="Edit Item" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_USD: 0, retail_price: Number(fromUSD(item.retail_price || 0, 'ZMW').toFixed(2)), stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
+                            <button title="Edit Item" onClick={() => { const locCur = item.local_currency || 'ZMW'; setAvgCostCurrency('USD'); setRetailCurrency(locCur as any); setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_USD: 0, retail_price: locCur === 'ZMW' && item.retail_price_local ? item.retail_price_local : Number(fromUSD(item.retail_price || 0, 'ZMW').toFixed(2)), stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
                             <button title="Delete Item" onClick={() => setDeleteConfirmModal({ isOpen: true, isBulk: false, id: item.id, name: item.name, tab: 'items' })} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         </td>
@@ -2159,7 +2457,7 @@ export default function Warehouse() {
                             </div>
                           </div>
                           <div className="flex gap-1.5 flex-shrink-0">
-                            <button title="Edit Item" onClick={() => { setAvgCostCurrency('USD'); setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_USD: 0, retail_price: Number(fromUSD(item.retail_price || 0, 'ZMW').toFixed(2)), stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
+                            <button title="Edit Item" onClick={() => { const locCur = item.local_currency || 'ZMW'; setAvgCostCurrency('USD'); setRetailCurrency(locCur as any); setEditingItemId(item.id); setItemForm({ id: item.id, brand_id: item.brand_id, name: item.name, category: item.category, sku: item.sku, min_stock_limit: item.min_stock_limit, avg_cost_USD: 0, retail_price: locCur === 'ZMW' && item.retail_price_local ? item.retail_price_local : Number(fromUSD(item.retail_price || 0, 'ZMW').toFixed(2)), stock: totalStock, inventory_id: '', location_id: '', brand_manual: '' }); setItemModal(true); }} className="text-gray-400 hover:text-primary transition-colors p-2 rounded-lg bg-gray-50 hover:bg-primary/10"><Pencil className="w-4 h-4" /></button>
                             <button title="Delete Item" onClick={() => setDeleteConfirmModal({ isOpen: true, isBulk: false, id: item.id, name: item.name, tab: 'items' })} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
                           </div>
                         </div>
@@ -2275,6 +2573,9 @@ export default function Warehouse() {
                         </td>
                         <td className="px-5 py-3.5 text-right">
                           <div className="flex justify-end gap-1">
+                            <button title="Download Brand Catalog PDF" onClick={() => exportSingleBrandToPDF(b, items, inventory, costDisplayCurrency, retailDisplayCurrency)} className="text-gray-400 hover:text-indigo-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-indigo-50"><Printer className="w-3.5 h-3.5" /></button>
+                            <button title="Download Brand Catalog Excel" onClick={() => exportSingleBrandToExcel(b, items, inventory, costDisplayCurrency, retailDisplayCurrency)} className="text-gray-400 hover:text-emerald-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-emerald-50"><FileText className="w-3.5 h-3.5" /></button>
+                            <button title="Bulk Price Update" onClick={() => { setBulkPriceBrand({ id: b.id, name: b.name }); }} className="text-gray-400 hover:text-emerald-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-emerald-50"><DollarSign className="w-3.5 h-3.5" /></button>
                             <button title="Edit Brand" onClick={() => { setEditingBrandId(b.id); setBrandForm({ name: b.name, origin_country: b.origin_country }); setBrandModal(true); }} className="text-gray-400 hover:text-blue-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-blue-50"><Pencil className="w-3.5 h-3.5" /></button>
                             <button title="Delete Brand" onClick={() => { setDeleteConfirmModal({ isOpen: true, isBulk: false, id: b.id, name: b.name, tab: 'brands' }); }} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg bg-gray-50 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
@@ -2311,6 +2612,9 @@ export default function Warehouse() {
                             <p className="text-xs text-gray-500 mt-1">Origin: {b.origin_country} · <span className="font-bold text-blue-600">{itemCount} items</span></p>
                           </div>
                           <div className="flex flex-col gap-1">
+                            <button title="Download Brand Catalog PDF" onClick={() => exportSingleBrandToPDF(b, items, inventory, costDisplayCurrency, retailDisplayCurrency)} className="text-gray-400 hover:text-indigo-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-indigo-50 flex-shrink-0"><Printer className="w-4 h-4" /></button>
+                            <button title="Download Brand Catalog Excel" onClick={() => exportSingleBrandToExcel(b, items, inventory, costDisplayCurrency, retailDisplayCurrency)} className="text-gray-400 hover:text-emerald-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-emerald-50 flex-shrink-0"><FileText className="w-4 h-4" /></button>
+                            <button title="Bulk Price Update" onClick={() => { setBulkPriceBrand({ id: b.id, name: b.name }); }} className="text-gray-400 hover:text-emerald-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-emerald-50 flex-shrink-0"><DollarSign className="w-4 h-4" /></button>
                             <button title="Edit Brand" onClick={() => { setEditingBrandId(b.id); setBrandForm({ name: b.name, origin_country: b.origin_country }); setBrandModal(true); }} className="text-gray-400 hover:text-blue-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-blue-50 flex-shrink-0"><Pencil className="w-4 h-4" /></button>
                             <button title="Delete Brand" onClick={() => { setDeleteConfirmModal({ isOpen: true, isBulk: false, id: b.id, name: b.name, tab: 'brands' }); }} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg bg-gray-50 hover:bg-red-50 flex-shrink-0"><Trash2 className="w-4 h-4" /></button>
                           </div>
@@ -3416,6 +3720,182 @@ export default function Warehouse() {
                   </div>
                 </div>
 
+                {/* ── Brand Stock Clear ── */}
+                <div className="bg-white rounded-2xl border border-gray-100 p-6">
+                  <div className="flex items-start gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center text-orange-600 flex-shrink-0">
+                      <Eraser className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="text-sm font-black text-gray-900 uppercase tracking-tight">Brand Stock Clear</h4>
+                      <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">
+                        Zero out the stock quantities for selected brand items at a specific location. The brand, items, and all their details are preserved — only the quantity is cleared.
+                      </p>
+
+                      {/* Step 1: Select Location */}
+                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-wider mb-1">1. Select Location</label>
+                          <select
+                            className="input-field text-xs h-10 w-full"
+                            value={bscLocation}
+                            onChange={e => { setBscLocation(e.target.value); setBscBrand(''); setBscSelectedItems(new Set()); }}
+                          >
+                            <option value="">Select location...</option>
+                            {locations.map(l => (
+                              <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Step 2: Select Brand */}
+                        {bscLocation && (
+                          <div>
+                            <label className="block text-[10px] font-black text-gray-500 uppercase tracking-wider mb-1">2. Select Brand</label>
+                            <select
+                              className="input-field text-xs h-10 w-full"
+                              value={bscBrand}
+                              onChange={e => { setBscBrand(e.target.value); setBscSelectedItems(new Set()); }}
+                            >
+                              <option value="">Select brand...</option>
+                              <option value="ALL">⚠️ ALL BRANDS</option>
+                              {brands.map(b => (
+                                <option key={b.id} value={b.id}>{b.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Step 3: Select Items */}
+                      {bscLocation && bscBrand && bscBrand !== 'ALL' && (() => {
+                        const brandItems = items.filter(i => i.brand_id === bscBrand);
+                        const locationItems = brandItems.filter(item =>
+                          inventory.some(e => e.item_id === item.id && e.location_id === bscLocation && e.quantity > 0)
+                        );
+                        return locationItems.length > 0 ? (
+                          <div className="mt-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <label className="text-[10px] font-black text-gray-500 uppercase tracking-wider">3. Select Items to Clear</label>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  className="text-[10px] font-bold text-primary hover:underline"
+                                  onClick={() => setBscSelectedItems(new Set(locationItems.map(i => i.id)))}>
+                                  Select All
+                                </button>
+                                <span className="text-gray-300">|</span>
+                                <button
+                                  type="button"
+                                  className="text-[10px] font-bold text-gray-400 hover:underline"
+                                  onClick={() => setBscSelectedItems(new Set())}>
+                                  Clear All
+                                </button>
+                              </div>
+                            </div>
+                            <div className="max-h-52 overflow-y-auto border border-gray-100 rounded-xl divide-y divide-gray-50">
+                              {locationItems.map(item => {
+                                const inv = inventory.find(e => e.item_id === item.id && e.location_id === bscLocation);
+                                const qty = inv?.quantity ?? 0;
+                                const checked = bscSelectedItems.has(item.id);
+                                return (
+                                  <label key={item.id} className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-orange-50/50 transition-colors ${checked ? 'bg-orange-50' : ''}`}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={e => {
+                                        const next = new Set(bscSelectedItems);
+                                        e.target.checked ? next.add(item.id) : next.delete(item.id);
+                                        setBscSelectedItems(next);
+                                      }}
+                                      className="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-400"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs font-bold text-gray-800 truncate">{item.name}</p>
+                                      <p className="text-[10px] text-gray-400">{item.sku}</p>
+                                    </div>
+                                    <span className={`text-xs font-black px-2 py-0.5 rounded-full ${qty > 0 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'}`}>
+                                      {qty} units
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                            <p className="text-[10px] text-gray-400 mt-1">{bscSelectedItems.size} of {locationItems.length} items selected</p>
+                          </div>
+                        ) : (
+                          <div className="mt-3 p-3 bg-gray-50 rounded-xl text-xs text-gray-400 text-center">
+                            No items from this brand have stock at this location.
+                          </div>
+                        );
+                      })()}
+
+                      {/* Action Button */}
+                      {bscLocation && bscBrand && (
+                        <div className="mt-4 flex items-center gap-3">
+                          <button
+                            disabled={bscSaving || (bscBrand !== 'ALL' && bscSelectedItems.size === 0)}
+                            className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-40"
+                            onClick={async () => {
+                              const locName = locations.find(l => l.id === bscLocation)?.name ?? bscLocation;
+                              const brandName = bscBrand === 'ALL' ? 'ALL brands' : brands.find(b => b.id === bscBrand)?.name ?? bscBrand;
+
+                              let targetInvIds: string[] = [];
+
+                              if (bscBrand === 'ALL') {
+                                targetInvIds = inventory
+                                  .filter(e => e.location_id === bscLocation && e.quantity > 0)
+                                  .map(e => e.id);
+                              } else {
+                                const selectedItemIds = Array.from(bscSelectedItems);
+                                targetInvIds = inventory
+                                  .filter(e => e.location_id === bscLocation && selectedItemIds.includes(e.item_id) && e.quantity > 0)
+                                  .map(e => e.id);
+                              }
+
+                              if (targetInvIds.length === 0) {
+                                alert('No stock entries found to clear.');
+                                return;
+                              }
+
+                              const msg = bscBrand === 'ALL'
+                                ? `Clear ALL stock quantities for ALL brands at "${locName}"? Item names and details will NOT be deleted. Only quantities set to 0.`
+                                : `Clear stock quantities for ${bscSelectedItems.size} selected item(s) from "${brandName}" at "${locName}"? Only quantities are zeroed — nothing is deleted.`;
+
+                              if (!window.confirm(msg)) return;
+
+                              setBscSaving(true);
+                              try {
+                                const { writeBatch: wb, doc: d } = await import('firebase/firestore');
+                                const { db: firestoreDb } = await import('../lib/firebase');
+                                for (let i = 0; i < targetInvIds.length; i += 490) {
+                                  const chunk = targetInvIds.slice(i, i + 490);
+                                  const batch = wb(firestoreDb);
+                                  chunk.forEach(invId => batch.update(d(firestoreDb, 'inventory', invId), { quantity: 0 }));
+                                  await batch.commit();
+                                }
+                                alert(`Done! ${targetInvIds.length} stock record(s) set to 0 at ${locName}. No items were deleted.`);
+                                setBscSelectedItems(new Set());
+                              } catch (err: any) {
+                                alert('Error: ' + err.message);
+                              } finally {
+                                setBscSaving(false);
+                              }
+                            }}
+                          >
+                            {bscSaving ? 'Clearing...' : `Zero Out ${bscBrand === 'ALL' ? 'All Stock' : `${bscSelectedItems.size} Item(s)`}`}
+                          </button>
+                          {bscBrand !== 'ALL' && bscSelectedItems.size > 0 && (
+                            <span className="text-[10px] text-orange-600 font-bold">
+                              Will zero out {bscSelectedItems.size} item type(s) only
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 <div className="bg-white rounded-2xl border border-gray-100 p-6">
                   <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest mb-4">UI Label Standards</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -3477,7 +3957,7 @@ export default function Warehouse() {
         </form>
       </Modal>
 
-      <Modal isOpen={brandModal} onClose={() => setBrandModal(false)} title="Add Brand" description="Register a new product brand." size="sm">
+      <Modal isOpen={brandModal} onClose={() => setBrandModal(false)} title={editingBrandId ? "Edit Brand" : "Add Brand"} description={editingBrandId ? "Update existing product brand." : "Register a new product brand."} size="sm">
         <form onSubmit={handleAddBrand} className="space-y-4">
           <div>
             <label className="label">Brand Name</label>
@@ -3491,7 +3971,7 @@ export default function Warehouse() {
           </div>
           <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
             <button type="button" className="btn-secondary" onClick={() => setBrandModal(false)}>Cancel</button>
-            <button type="submit" className="btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Add Brand'}</button>
+            <button type="submit" className="btn-primary" disabled={saving}>{saving ? 'Saving…' : editingBrandId ? 'Save Changes' : 'Add Brand'}</button>
           </div>
         </form>
       </Modal>
@@ -3512,6 +3992,7 @@ export default function Warehouse() {
             
             {isManualBrand ? (
               <input 
+                autoFocus
                 required 
                 className="input-field bg-white" 
                 placeholder="Enter new brand name..." 
@@ -3520,6 +4001,7 @@ export default function Warehouse() {
               />
             ) : (
               <select 
+                autoFocus
                 title="Select Brand" 
                 required 
                 className="input-field bg-white" 
@@ -3566,10 +4048,40 @@ export default function Warehouse() {
             )}
 
             {editingItemId && (
-              <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100/50 col-span-1">
-                <label className="label flex items-center gap-2 text-blue-700">Stock <span className="text-[10px] font-semibold text-blue-600 bg-blue-100 px-2 py-0.5 rounded">Quantity</span></label>
-                <input title="Stock Quantity" placeholder="0" type="number" min={0} className="input-field bg-white border-blue-200 focus:ring-blue-400 focus:border-blue-400" value={itemForm.stock} onChange={e => setItemForm(f => ({ ...f, stock: Number(e.target.value) }))} />
-                <p className="text-[10px] text-blue-500 mt-1 italic">Update current level.</p>
+              <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100/50 col-span-2 grid grid-cols-2 gap-4">
+                <div className="col-span-2 sm:col-span-1">
+                  <label className="label flex items-center gap-2 text-blue-700">Target Location</label>
+                  <select 
+                    title="Select Location to Update Stock"
+                    className="input-field bg-white border-blue-200 focus:ring-blue-400 focus:border-blue-400"
+                    value={itemForm.location_id || ''}
+                    onChange={(e) => {
+                       const locId = e.target.value;
+                       if (!locId) {
+                         const totalStock = inventory.filter(i => i.item_id === editingItemId).reduce((sum, inv) => sum + inv.quantity, 0);
+                         setItemForm(f => ({ ...f, location_id: '', inventory_id: '', stock: totalStock }));
+                       } else {
+                         const existingInv = inventory.find(i => i.location_id === locId && i.item_id === editingItemId);
+                         setItemForm(f => ({ 
+                           ...f, 
+                           location_id: locId, 
+                           inventory_id: existingInv ? existingInv.id : '',
+                           stock: existingInv ? existingInv.quantity : 0 
+                         }));
+                       }
+                    }}
+                  >
+                    <option value="">-- Select location to edit stock --</option>
+                    {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2 sm:col-span-1">
+                  <label className="label flex items-center gap-2 text-blue-700">Stock <span className="text-[10px] font-semibold text-blue-600 bg-blue-100 px-2 py-0.5 rounded">{!itemForm.location_id ? 'Global Total' : 'Location Qty'}</span></label>
+                  <input title="Stock Quantity" disabled={!itemForm.location_id} placeholder="0" type="number" min={0} className="input-field bg-white border-blue-200 focus:ring-blue-400 focus:border-blue-400 disabled:opacity-50 disabled:bg-gray-100" value={itemForm.stock} onChange={e => setItemForm(f => ({ ...f, stock: Number(e.target.value) }))} />
+                </div>
+                <p className="col-span-2 text-[10px] text-blue-500 italic">
+                  {!itemForm.location_id ? 'Select a location from the dropdown to update its specific stock level.' : 'Updating stock for the selected location only. Global total adjusts automatically.'}
+                </p>
               </div>
             )}
             <div>
@@ -3595,8 +4107,26 @@ export default function Warehouse() {
               <input title="Average Cost" placeholder="0" type="number" step="0.01" min={0} className="input-field" value={itemForm.avg_cost_USD} onChange={e => setItemForm(f => ({ ...f, avg_cost_USD: Number(e.target.value) }))} />
             </div>
             <div>
-              <label className="label flex items-center gap-2">Retail Price (ZMW) <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Sellable</span></label>
-              <input title="Retail Price in ZMW" placeholder="0" type="number" step="0.01" min={0} className="input-field" value={itemForm.retail_price || ''} onChange={e => setItemForm(f => ({ ...f, retail_price: Number(e.target.value) }))} />
+              <div className="flex items-center justify-between mb-1">
+                <label className="label flex items-center gap-2 mb-0">Retail Price <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Sellable</span></label>
+                <select 
+                  className="text-xs bg-gray-50 border border-gray-200 rounded p-1 text-gray-700 font-medium"
+                  value={retailCurrency}
+                  onChange={e => {
+                    const newCurrency = e.target.value as 'USD'|'ZMW';
+                    if (newCurrency === 'ZMW' && retailCurrency === 'USD') {
+                       setItemForm(f => ({ ...f, retail_price: Number(fromUSD(f.retail_price, 'ZMW').toFixed(2)) }));
+                    } else if (newCurrency === 'USD' && retailCurrency === 'ZMW') {
+                       setItemForm(f => ({ ...f, retail_price: Number(toUSD(f.retail_price, 'ZMW').toFixed(2)) }));
+                    }
+                    setRetailCurrency(newCurrency);
+                  }}
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="ZMW">ZMW (K)</option>
+                </select>
+              </div>
+              <input title="Retail Price" placeholder="0" type="number" step="0.01" min={0} className="input-field" value={itemForm.retail_price === 0 ? '' : itemForm.retail_price} onChange={e => setItemForm(f => ({ ...f, retail_price: Number(e.target.value) }))} />
             </div>
           </div>
           <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
@@ -3685,8 +4215,8 @@ export default function Warehouse() {
                 {onboardForm.rows.map((row, idx) => {
                   const matchingItems = (row.brand_name || row.item_name) ? items.filter(i => {
                     const brand = brands.find(b => b.id === i.brand_id);
-                    return (brand?.name.toLowerCase().includes(row.brand_name.toLowerCase())) &&
-                           (i.name.toLowerCase().includes(row.item_name.toLowerCase()));
+                    return ((brand?.name || '').toLowerCase().includes((row.brand_name || '').toLowerCase())) &&
+                           ((i.name || '').toLowerCase().includes((row.item_name || '').toLowerCase()));
                   }).slice(0, 3) : [];
 
                   return (
@@ -3912,6 +4442,23 @@ export default function Warehouse() {
                 <p className="text-[11px] text-red-600 font-medium mt-0.5">Physical items won't be affected, only digital logs.</p>
              </div>
           </div>
+
+          {deleteConfirmModal.tab === 'containers' && (
+            <label className="flex items-start gap-3 p-3 bg-red-50/50 border border-red-100/50 rounded-lg cursor-pointer hover:bg-red-50 transition-colors">
+              <div className="flex items-center h-5">
+                <input 
+                  type="checkbox" 
+                  checked={deleteContainerItems}
+                  onChange={(e) => setDeleteContainerItems(e.target.checked)}
+                  className="w-4 h-4 rounded border-red-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                />
+              </div>
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-red-900">Revert stock entries</span>
+                <span className="text-[10px] text-red-700 leading-snug mt-0.5">This will remove the quantities from your inventory that were added by this container. Catalog items themselves will not be deleted.</span>
+              </div>
+            </label>
+          )}
           
           <div className="flex gap-3 justify-end sticky bottom-0 bg-white">
             <button type="button" className="btn-secondary" onClick={() => setDeleteConfirmModal(f => ({ ...f, isOpen: false }))}>Cancel</button>
@@ -4025,9 +4572,43 @@ export default function Warehouse() {
         </div>
       </Modal>
 
-      {/* ── Add Stock Modal ─────────────────────────────────────────────────── */}
-      <Modal isOpen={addStockModal} onClose={() => { setAddStockModal(false); resetAddStockForm(); }} title="Add Stock Manually" description="Add stock to an existing item or create a new item with stock." size="lg">
-        <form onSubmit={handleAddStock} className="space-y-4">
+      {/* ── Add Stock Modal — Transfer-style floating card ─────────────────── */}
+      {/* Minimized pill */}
+      {addStockMinimized && !addStockModal && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-4 duration-300">
+          <div className="flex items-center gap-3 bg-gray-900 text-white px-4 py-3 rounded-2xl shadow-2xl shadow-gray-900/30 border border-gray-700">
+            <div className="flex flex-col min-w-0">
+              <span className="text-xs font-black uppercase tracking-widest text-white/90">Add Stock</span>
+              <span className="text-[10px] text-white/50 truncate max-w-[180px]">
+                {addStockDate} · {addStockMode === 'new' ? 'New Item' : (addStockForm.item_id ? (items.find(i => i.id === addStockForm.item_id)?.name ?? 'Item selected') : 'Select item…')}
+              </span>
+            </div>
+            <button type="button" onClick={() => { setAddStockMinimized(false); setAddStockModal(true); }}
+              className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-colors flex-shrink-0" title="Restore">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" /></svg>
+            </button>
+            <button type="button" onClick={() => { setAddStockMinimized(false); setAddStockModal(false); resetAddStockForm(); }}
+              className="p-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/40 text-red-300 transition-colors flex-shrink-0" title="Close">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Full modal */}
+      <Modal
+        isOpen={addStockModal}
+        onClose={() => { setAddStockModal(false); resetAddStockForm(); }}
+        onMinimize={() => { setAddStockModal(false); setAddStockMinimized(true); }}
+        onRestore={() => { setAddStockMinimized(false); setAddStockModal(true); }}
+        onOutsideClick={() => { setAddStockModal(false); setAddStockMinimized(true); }}
+        minimized={false}
+        title="Add Stock Manually"
+        description="Add stock to an existing item or create a new item with stock."
+        size="lg"
+      >
+        <div className="space-y-6">
+          <form onSubmit={handleStageItem} className="space-y-4">
           {/* Mode Toggle */}
           <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
             <button type="button" onClick={() => setAddStockMode('existing')} className={clsx("flex-1 py-2.5 text-xs font-bold rounded-lg transition-all", addStockMode === 'existing' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
@@ -4038,17 +4619,50 @@ export default function Warehouse() {
             </button>
           </div>
 
+          {/* Stock Date */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Stock Date</label>
+              <input
+                type="date"
+                className="input-field font-bold"
+                value={addStockDate}
+                max={new Date().toISOString().split('T')[0]}
+                onChange={e => setAddStockDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Container / Ref No. (Optional)</label>
+              <input
+                type="text"
+                placeholder="e.g. MANUAL-123456"
+                className="input-field font-bold"
+                value={addStockContainerNo}
+                onChange={e => setAddStockContainerNo(e.target.value)}
+              />
+            </div>
+          </div>
+
           {addStockMode === 'existing' ? (
             /* ── Existing Item Mode ──────────────────────────── */
             <div className="space-y-4">
               <div>
+                <label className="label">Brand Filter</label>
+                <select title="Filter by Brand" className="input-field" value={addStockBrandFilter} onChange={e => { setAddStockBrandFilter(e.target.value); setAddStockForm(f => ({ ...f, item_id: '' })); }}>
+                  <option value="">All Brands</option>
+                  {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+              <div>
                 <label className="label">Item</label>
                 <select title="Select Item" required className="input-field" value={addStockForm.item_id} onChange={e => setAddStockForm(f => ({ ...f, item_id: e.target.value }))}>
                   <option value="">Select item…</option>
-                  {items.map(i => {
-                    const brand = brands.find(b => b.id === i.brand_id);
-                    return <option key={i.id} value={i.id}>{i.name} — {brand?.name || 'No Brand'} ({i.sku})</option>;
-                  })}
+                  {items
+                    .filter(i => !addStockBrandFilter || i.brand_id === addStockBrandFilter)
+                    .map(i => {
+                      const brand = brands.find(b => b.id === i.brand_id);
+                      return <option key={i.id} value={i.id}>{i.name} — {brand?.name || 'No Brand'} ({i.sku})</option>;
+                    })}
                 </select>
               </div>
               {addStockForm.item_id && addStockForm.location_id && (
@@ -4086,7 +4700,7 @@ export default function Warehouse() {
                   <input className="input-field" placeholder="e.g. SKU-001 (auto if empty)" value={addStockForm.sku} onChange={e => setAddStockForm(f => ({ ...f, sku: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Brand</label>
+                  <label className="label">Category</label>
                   <input className="input-field" placeholder="e.g. Apparel" value={addStockForm.category} onChange={e => setAddStockForm(f => ({ ...f, category: e.target.value }))} />
                 </div>
                 <div>
@@ -4110,7 +4724,7 @@ export default function Warehouse() {
                 {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
               </select>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label className="label">Quantity</label>
                 <input title="Quantity" required type="number" min={1} className="input-field" value={addStockForm.quantity} onChange={e => setAddStockForm(f => ({ ...f, quantity: Number(e.target.value) }))} />
@@ -4129,12 +4743,42 @@ export default function Warehouse() {
           </div>
 
           <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
-            <button type="button" className="btn-secondary" onClick={() => { setAddStockModal(false); resetAddStockForm(); }}>Cancel</button>
-            <button type="submit" className="btn-primary" disabled={saving}>
-              {saving ? 'Adding…' : addStockMode === 'new' ? 'Create & Add Stock' : 'Add Stock'}
+            <button type="submit" className="btn-secondary" disabled={saving}>
+              Add to List
             </button>
           </div>
         </form>
+
+        {stagedItems.length > 0 && (
+          <div className="space-y-3 bg-gray-50 p-4 rounded-2xl border border-gray-100">
+            <h4 className="font-bold text-gray-900 text-sm">Staged Items ({stagedItems.length})</h4>
+            <div className="max-h-[30vh] overflow-y-auto space-y-2">
+              {stagedItems.map((staged, idx) => (
+                <div key={idx} className="flex items-center justify-between bg-white p-2.5 rounded-lg border border-gray-100 shadow-sm">
+                  <div>
+                    <p className="text-xs font-bold text-gray-900">
+                      {staged.mode === 'new' ? staged.item_name : (items.find(i => i.id === staged.item_id)?.name || 'Unknown')}
+                      <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium uppercase">{staged.mode}</span>
+                    </p>
+                    <p className="text-[10px] text-gray-500 font-medium mt-0.5">{staged.quantity} units @ {staged.unit_cost} {staged.currency}</p>
+                  </div>
+                  <button type="button" onClick={() => setStagedItems(prev => prev.filter((_, i) => i !== idx))} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
+          <button type="button" className="btn-secondary" onClick={() => { setAddStockModal(false); setAddStockMinimized(true); }}>Minimize</button>
+          <button type="button" className="btn-secondary" onClick={() => { setAddStockModal(false); resetAddStockForm(); }}>Cancel</button>
+          <button type="button" className="btn-primary" onClick={handleAddStock} disabled={saving || stagedItems.length === 0}>
+            {saving ? 'Submitting Batch…' : `Submit All (${stagedItems.length} items)`}
+          </button>
+        </div>
+      </div>
       </Modal>
       <Modal isOpen={!!adjustInvoiceContainer} onClose={() => setAdjustInvoiceContainer(null)} title={containers.find(c => c.id === adjustInvoiceContainer)?.status === 'Pending' ? "Receive Container & Reconcile" : "Resolve Invoice Discrepancies"} description={containers.find(c => c.id === adjustInvoiceContainer)?.status === 'Pending' ? "Enter the actual received quantities to officially receive this container into inventory." : "Adjust quantities for items received to fix mismatch between invoice and actual stock."} size="lg">
         <div className="space-y-4">
@@ -4252,38 +4896,153 @@ export default function Warehouse() {
               </select>
             </div>
 
+            {/* Currency Options */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">Unit Cost Currency</label>
+                <select
+                  value={exportAllFilters.unitCostCurrency}
+                  onChange={e => setExportAllFilters(f => ({ ...f, unitCostCurrency: e.target.value }))}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm font-medium focus:outline-none focus:border-primary bg-white"
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="ZMW">ZMW (K)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">Retail Price Currency</label>
+                <select
+                  value={exportAllFilters.retailPriceCurrency}
+                  onChange={e => setExportAllFilters(f => ({ ...f, retailPriceCurrency: e.target.value }))}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm font-medium focus:outline-none focus:border-primary bg-white"
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="ZMW">ZMW (K)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Include Empty Stocks */}
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={exportAllFilters.includeEmptyStocks}
+                  onChange={e => setExportAllFilters(f => ({ ...f, includeEmptyStocks: e.target.checked }))}
+                  className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary"
+                />
+                <span className="text-sm font-bold text-gray-700">Include empty stocks (zero quantity)</span>
+              </label>
+            </div>
+
             {/* Summary */}
             <div className="bg-gray-50 rounded-xl p-3 text-xs text-gray-500">
               <p className="font-bold text-gray-700 mb-1">Export will include:</p>
               <p>• Brand: {exportAllFilters.brandId ? brands.find(b => b.id === exportAllFilters.brandId)?.name : 'All'}</p>
               <p>• Location: {exportAllFilters.locationId ? locations.find(l => l.id === exportAllFilters.locationId)?.name : (exportAllFilters.locationType ? `All ${exportAllFilters.locationType}s` : 'All Locations')}</p>
+              <p>• Currencies: Unit Cost in {exportAllFilters.unitCostCurrency}, Retail in {exportAllFilters.retailPriceCurrency}</p>
+              <p>• Zero Stocks: {exportAllFilters.includeEmptyStocks ? 'Included' : 'Excluded'}</p>
             </div>
 
             <div className="flex gap-3 justify-end pt-2 border-t border-gray-100">
-              <button type="button" onClick={() => setExportAllModalOpen(false)} className="px-5 py-2.5 font-bold text-gray-700 border border-gray-200 rounded-xl hover:bg-gray-50 text-sm">Cancel</button>
+              <button type="button" onClick={() => setExportAllModalOpen(false)} className="px-5 py-2.5 font-bold text-gray-700 border border-gray-200 rounded-xl hover:bg-gray-50 text-sm mr-auto">Cancel</button>
+              
               <button
                 type="button"
                 disabled={exportAllLoading}
                 onClick={async () => {
                   setExportAllLoading(true);
                   try {
-                    // Build filtered data
                     const filteredLocs = exportAllFilters.locationId
                       ? locations.filter(l => l.id === exportAllFilters.locationId)
                       : (exportAllFilters.locationType ? locations.filter(l => l.type === exportAllFilters.locationType) : locations);
 
-                    await exportInventorySystemData({
+                    await exportGroupedStockReport({
                       inventory,
-                      sales: useStore.getState().sales,
-                      returns: useStore.getState().returns,
-                      expenses: useStore.getState().expenses,
                       locations: filteredLocs,
                       items,
                       brands,
                       filters: {
                         locationId: exportAllFilters.locationId || undefined,
                         brandId: exportAllFilters.brandId || undefined,
-                      }
+                        emptyStocksOnly: true,
+                        unitCostCurrency: exportAllFilters.unitCostCurrency,
+                        retailPriceCurrency: exportAllFilters.retailPriceCurrency,
+                      },
+                      format: 'pdf'
+                    });
+                    setExportAllModalOpen(false);
+                  } catch (err: any) {
+                    alert('Export failed: ' + err.message);
+                  } finally {
+                    setExportAllLoading(false);
+                  }
+                }}
+                className="btn-secondary flex items-center gap-2 px-4 py-2.5 text-sm font-bold disabled:opacity-50"
+              >
+                <FileText className="w-4 h-4" />
+                {exportAllLoading ? '...' : 'Empty Stocks (PDF)'}
+              </button>
+              <button
+                type="button"
+                disabled={exportAllLoading}
+                onClick={async () => {
+                  setExportAllLoading(true);
+                  try {
+                    const filteredLocs = exportAllFilters.locationId
+                      ? locations.filter(l => l.id === exportAllFilters.locationId)
+                      : (exportAllFilters.locationType ? locations.filter(l => l.type === exportAllFilters.locationType) : locations);
+
+                    await exportGroupedStockReport({
+                      inventory,
+                      locations: filteredLocs,
+                      items,
+                      brands,
+                      filters: {
+                        locationId: exportAllFilters.locationId || undefined,
+                        brandId: exportAllFilters.brandId || undefined,
+                        includeEmptyStocks: exportAllFilters.includeEmptyStocks,
+                        unitCostCurrency: exportAllFilters.unitCostCurrency,
+                        retailPriceCurrency: exportAllFilters.retailPriceCurrency,
+                      },
+                      format: 'pdf'
+                    });
+                    setExportAllModalOpen(false);
+                  } catch (err: any) {
+                    alert('Export failed: ' + err.message);
+                  } finally {
+                    setExportAllLoading(false);
+                  }
+                }}
+                className="btn-primary bg-red-600 hover:bg-red-700 border-none flex items-center gap-2 px-6 py-2.5 text-sm font-bold disabled:opacity-50"
+              >
+                <FileText className="w-4 h-4" />
+                {exportAllLoading ? 'Exporting...' : 'Download PDF'}
+              </button>
+
+              <button
+                type="button"
+                disabled={exportAllLoading}
+                onClick={async () => {
+                  setExportAllLoading(true);
+                  try {
+                    const filteredLocs = exportAllFilters.locationId
+                      ? locations.filter(l => l.id === exportAllFilters.locationId)
+                      : (exportAllFilters.locationType ? locations.filter(l => l.type === exportAllFilters.locationType) : locations);
+
+                    await exportGroupedStockReport({
+                      inventory,
+                      locations: filteredLocs,
+                      items,
+                      brands,
+                      filters: {
+                        locationId: exportAllFilters.locationId || undefined,
+                        brandId: exportAllFilters.brandId || undefined,
+                        includeEmptyStocks: exportAllFilters.includeEmptyStocks,
+                        unitCostCurrency: exportAllFilters.unitCostCurrency,
+                        retailPriceCurrency: exportAllFilters.retailPriceCurrency,
+                      },
+                      format: 'excel'
                     });
                     setExportAllModalOpen(false);
                   } catch (err: any) {
@@ -4300,6 +5059,15 @@ export default function Warehouse() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {bulkPriceBrand && (
+        <BulkBrandPriceModal
+          isOpen={true}
+          onClose={() => setBulkPriceBrand(null)}
+          brandId={bulkPriceBrand.id}
+          brandName={bulkPriceBrand.name}
+        />
       )}
     </div>
   );
